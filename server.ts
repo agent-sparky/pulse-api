@@ -996,6 +996,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/header-timeline?url=https://example.com'</pre>
       <p><strong>Domain Age Checker:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/domain-age?url=https://example.com'</pre>
+      <p><strong>JWT Token Decoder:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/jwt-decode?url=https://example.com'</pre>
+      <p><strong>API Usage Analytics:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/analytics' -H 'X-API-Key: YOUR_KEY'</pre>
+      <p><strong>Webhook Retry:</strong></p>
+      <pre>curl -s -X POST 'http://147.93.131.124/api/webhook-retry' -H 'Content-Type: application/json' -d '{"url":"https://httpbin.org/post","payload":{"test":true}}'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1885,6 +1891,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/email-obfuscation?url=URL</h3><p class="desc">Email obfuscation detector — scans page HTML for JavaScript-encoded, CSS-hidden, base64, hex-encoded, and HTML entity-encoded email addresses.</p><pre>curl -s \'http://147.93.131.124/api/email-obfuscation?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/email-obfuscation?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/header-timeline?url=URL</h3><p class="desc">Header timeline — fetches a URL twice with 1-second delay and compares response headers to identify dynamic vs stable headers.</p><pre>curl -s \'http://147.93.131.124/api/header-timeline?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/header-timeline?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/domain-age?url=URL</h3><p class="desc">Domain age checker — computes domain age from WHOIS creation date and returns registration timeline in years, months, and days.</p><pre>curl -s \'http://147.93.131.124/api/domain-age?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/domain-age?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/jwt-decode?url=URL</h3><p class="desc">JWT token decoder — scans response headers and body for JWT tokens, decodes header and payload segments, extracts algorithm, issuer, subject, expiry, and issued-at claims.</p><pre>curl -s \'http://147.93.131.124/api/jwt-decode?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/jwt-decode?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/analytics</h3><p class="desc">API usage analytics — returns per-user check counts, top URLs, and usage breakdown by day and week. Requires X-API-Key header.</p><pre>curl -s \'http://147.93.131.124/api/analytics\' -H \'X-API-Key: YOUR_KEY\'</pre></div>'
+        + '<div class="ep"><h3><span class="method post">POST</span>/api/webhook-retry</h3><p class="desc">Webhook retry — replays a webhook delivery to a URL with JSON payload and exponential backoff retries on failure.</p><pre>curl -s -X POST \'http://147.93.131.124/api/webhook-retry\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post","payload":{"test":true}}\'</pre><button class="try-btn" onclick="tryWebhookRetry(this)">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -1897,7 +1906,7 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/monitors/:id/checks</h3><p class="desc">Last 100 checks for a specific monitor. Requires X-API-Key header.</p><pre>curl -s http://147.93.131.124/api/monitors/1/checks -H \'X-API-Key: YOUR_KEY\'</pre></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/badge/:id</h3><p class="desc">SVG uptime badge for a monitor — embed in README.</p><pre>curl -s http://147.93.131.124/api/badge/1\n# Embed: ![Uptime](http://147.93.131.124/api/badge/1)</pre><button class="try-btn" onclick="tryBadge(this,\'/api/badge/1\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/webhooks/stripe</h3><p class="desc">Stripe webhook handler for checkout.session.completed and subscription.deleted events.</p><pre># Handled automatically by Stripe</pre></div>'
-        + '<script>function tryIt(btn,ep){var r=btn.nextElementSibling;r.style.display="block";r.textContent="Loading...";fetch(ep).then(function(res){return res.json()}).then(function(d){r.textContent=JSON.stringify(d,null,2)}).catch(function(e){r.textContent="Error: "+e.message})}function tryBadge(btn,ep){var r=btn.nextElementSibling;r.style.display="block";r.innerHTML="<img src=\\""+ep+"\\" alt=\\"badge\\"/>"}</script>'
+        + '<script>function tryIt(btn,ep){var r=btn.nextElementSibling;r.style.display="block";r.textContent="Loading...";fetch(ep).then(function(res){return res.json()}).then(function(d){r.textContent=JSON.stringify(d,null,2)}).catch(function(e){r.textContent="Error: "+e.message})}function tryBadge(btn,ep){var r=btn.nextElementSibling;r.style.display="block";r.innerHTML="<img src=\\""+ep+"\\" alt=\\"badge\\"/>"}function tryWebhookRetry(btn){var r=btn.nextElementSibling;r.style.display="block";r.textContent="Loading...";fetch("/api/webhook-retry",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:"https://httpbin.org/post",payload:{test:true}})}).then(function(res){return res.json()}).then(function(d){r.textContent=JSON.stringify(d,null,2)}).catch(function(e){r.textContent="Error: "+e.message})}</script>'
         + '</div></body></html>'
 
       return withCors(docsPage, {
@@ -5047,6 +5056,192 @@ const server = Bun.serve({
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to check domain age'
         return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- JWT Token Decoder ---
+    if (path === '/api/jwt-decode') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'jwt-decode')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow' })
+        const headers = headerObject(resp.headers)
+        const body = await resp.text()
+
+        const jwtPattern = /[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g
+        const tokensFound: Array<{ source: string; header: Record<string, unknown>; payload: Record<string, unknown>; algorithm: string | null; issuer: string | null; subject: string | null; expiry: string | null; issued_at: string | null }> = []
+
+        const decodeBase64Url = (s: string): string => {
+          const padded = s.replace(/-/g, '+').replace(/_/g, '/') + '=='.slice(0, (4 - (s.length % 4)) % 4)
+          try { return atob(padded) } catch { return '{}' }
+        }
+
+        const tryParseJwt = (token: string, source: string) => {
+          const parts = token.split('.')
+          if (parts.length !== 3) return
+          try {
+            const header = JSON.parse(decodeBase64Url(parts[0]))
+            const payload = JSON.parse(decodeBase64Url(parts[1]))
+            tokensFound.push({
+              source,
+              header,
+              payload,
+              algorithm: header.alg || null,
+              issuer: payload.iss || null,
+              subject: payload.sub || null,
+              expiry: payload.exp ? new Date(payload.exp * 1000).toISOString() : null,
+              issued_at: payload.iat ? new Date(payload.iat * 1000).toISOString() : null,
+            })
+          } catch {}
+        }
+
+        // Check response headers for JWTs
+        for (const [hName, hValue] of Object.entries(headers)) {
+          const matches = hValue.match(jwtPattern)
+          if (matches) {
+            for (const m of matches) tryParseJwt(m, 'header:' + hName)
+          }
+        }
+
+        // Check response body for JWTs
+        const bodyMatches = body.match(jwtPattern)
+        if (bodyMatches) {
+          for (const m of bodyMatches) tryParseJwt(m, 'body')
+        }
+
+        return withJson({
+          url: normalized,
+          tokens_found: tokensFound,
+          count: tokensFound.length,
+          has_jwt: tokensFound.length > 0,
+          score: tokensFound.length > 0 ? 100 : 0,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to decode JWT'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- API Usage Analytics ---
+    if (path === '/api/analytics') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim()
+      if (!apiKey) {
+        return withJson({ error: 'X-API-Key header required' }, { status: 401 })
+      }
+
+      const keyRow = getApiKeyByKey(apiKey)
+      if (!keyRow) {
+        return withJson({ error: 'Invalid API key' }, { status: 401 })
+      }
+
+      try {
+        const totalChecks = db.prepare('SELECT COUNT(*) as count FROM checks WHERE api_key = ?').get(apiKey) as { count: number } | null
+        const topUrls = db.prepare('SELECT url, COUNT(*) as count FROM checks WHERE api_key = ? GROUP BY url ORDER BY count DESC LIMIT 10').all(apiKey) as Array<{ url: string; count: number }>
+
+        const todayStr = utcDateKey()
+        const checksToday = db.prepare('SELECT COUNT(*) as count FROM checks WHERE api_key = ? AND created_at >= ?').get(apiKey, todayStr + 'T00:00:00.000Z') as { count: number } | null
+
+        const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+        const checksThisWeek = db.prepare('SELECT COUNT(*) as count FROM checks WHERE api_key = ? AND created_at >= ?').get(apiKey, weekAgo) as { count: number } | null
+
+        return withJson({
+          api_key: apiKey.slice(0, 8) + '...',
+          total_checks: totalChecks?.count || 0,
+          top_urls: topUrls,
+          checks_today: checksToday?.count || 0,
+          checks_this_week: checksThisWeek?.count || 0,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to fetch analytics'
+        return withJson({ error: message }, { status: 500 })
+      }
+    }
+
+    // --- Webhook Retry ---
+    if (path === '/api/webhook-retry') {
+      if (request.method !== 'POST') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'webhook-retry')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const body = await request.json() as { url?: string; payload?: unknown }
+        if (!body.url) {
+          return withJson({ error: 'url field required in JSON body' }, { status: 400 })
+        }
+
+        const webhookUrl = body.url
+        const payload = body.payload || {}
+        const maxRetries = 3
+        let lastStatus = 0
+        let lastTime = 0
+        let success = false
+        let retries = 0
+
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+          if (attempt > 0) {
+            // Exponential backoff: 1s, 2s, 4s
+            await new Promise(r => setTimeout(r, Math.pow(2, attempt - 1) * 1000))
+          }
+
+          const start = performance.now()
+          try {
+            const resp = await fetch(webhookUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            })
+            lastTime = Math.round(performance.now() - start)
+            lastStatus = resp.status
+
+            if (resp.status >= 200 && resp.status < 300) {
+              success = true
+              retries = attempt
+              break
+            }
+          } catch {
+            lastTime = Math.round(performance.now() - start)
+            lastStatus = 0
+          }
+          retries = attempt
+        }
+
+        return withJson({
+          url: webhookUrl,
+          status_code: lastStatus,
+          response_time_ms: lastTime,
+          success,
+          retries,
+          max_retries: maxRetries,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to retry webhook'
+        return withJson({ error: message }, { status: 400 })
       }
     }
 
