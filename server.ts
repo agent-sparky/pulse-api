@@ -948,6 +948,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/csp?url=https://example.com'</pre>
       <p><strong>Response Headers Inspector:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/response-headers?url=https://example.com'</pre>
+      <p><strong>SRI Checker:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/sri?url=https://example.com'</pre>
+      <p><strong>Cookie Consent Detector:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/cookie-consent?url=https://example.com'</pre>
+      <p><strong>TLS Cipher Suite Analyzer:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/tls-ciphers?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1813,6 +1819,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/lighthouse?url=URL</h3><p class="desc">Lighthouse audit — computes performance, accessibility, SEO, and security scores inline. Returns overall score and letter grade (A-F).</p><pre>curl -s \'http://147.93.131.124/api/lighthouse?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/lighthouse?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/csp?url=URL</h3><p class="desc">CSP analyzer — parses Content-Security-Policy header, extracts directives, detects unsafe-inline and unsafe-eval, and computes a security score.</p><pre>curl -s \'http://147.93.131.124/api/csp?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/csp?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/response-headers?url=URL</h3><p class="desc">Response headers inspector — returns all response headers annotated with category (security, caching, cors, server, content, custom).</p><pre>curl -s \'http://147.93.131.124/api/response-headers?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/response-headers?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/sri?url=URL</h3><p class="desc">Subresource Integrity checker — scans script and stylesheet tags for SRI integrity attributes. Returns resource list and coverage score.</p><pre>curl -s \'http://147.93.131.124/api/sri?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/sri?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/cookie-consent?url=URL</h3><p class="desc">Cookie consent detector — scans for GDPR consent banners, detects platforms (OneTrust, CookieBot, etc.), and identifies privacy signals.</p><pre>curl -s \'http://147.93.131.124/api/cookie-consent?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/cookie-consent?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/tls-ciphers?url=URL</h3><p class="desc">TLS cipher suite analyzer — connects to host and reports negotiated cipher, protocol version, key bits, and security warnings.</p><pre>curl -s \'http://147.93.131.124/api/tls-ciphers?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/tls-ciphers?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -3353,6 +3362,235 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to inspect headers'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- Subresource Integrity Checker ---
+    if (path === '/api/sri') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'sri')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow' })
+        const html = await resp.text()
+
+        const scriptRegex = /<script\b([^>]*)>/gi
+        const linkRegex = /<link\b([^>]*rel\s*=\s*["']stylesheet["'][^>]*)>/gi
+
+        const scripts: Array<{ src: string | null; has_integrity: boolean; integrity: string | null }> = []
+        let scriptMatch
+        while ((scriptMatch = scriptRegex.exec(html)) !== null) {
+          const attrs = scriptMatch[1]
+          const srcMatch = attrs.match(/src\s*=\s*["']([^"']+)["']/)
+          if (!srcMatch) continue
+          const integrityMatch = attrs.match(/integrity\s*=\s*["']([^"']+)["']/)
+          scripts.push({
+            src: srcMatch[1],
+            has_integrity: !!integrityMatch,
+            integrity: integrityMatch ? integrityMatch[1] : null,
+          })
+        }
+
+        const stylesheets: Array<{ href: string | null; has_integrity: boolean; integrity: string | null }> = []
+        let linkMatch
+        while ((linkMatch = linkRegex.exec(html)) !== null) {
+          const attrs = linkMatch[1]
+          const hrefMatch = attrs.match(/href\s*=\s*["']([^"']+)["']/)
+          if (!hrefMatch) continue
+          const integrityMatch = attrs.match(/integrity\s*=\s*["']([^"']+)["']/)
+          stylesheets.push({
+            href: hrefMatch[1],
+            has_integrity: !!integrityMatch,
+            integrity: integrityMatch ? integrityMatch[1] : null,
+          })
+        }
+
+        const scriptsWithSri = scripts.filter(s => s.has_integrity).length
+        const scriptsWithoutSri = scripts.filter(s => !s.has_integrity).length
+        const stylesheetsWithSri = stylesheets.filter(s => s.has_integrity).length
+        const stylesheetsWithoutSri = stylesheets.filter(s => !s.has_integrity).length
+        const total = scripts.length + stylesheets.length
+        const withSri = scriptsWithSri + stylesheetsWithSri
+        const score = total === 0 ? 100 : Math.round((withSri / total) * 100)
+
+        return withJson({
+          url: normalized,
+          scripts,
+          stylesheets,
+          scripts_with_sri: scriptsWithSri,
+          scripts_without_sri: scriptsWithoutSri,
+          stylesheets_with_sri: stylesheetsWithSri,
+          stylesheets_without_sri: stylesheetsWithoutSri,
+          total_resources: total,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check SRI'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- Cookie Consent Detector ---
+    if (path === '/api/cookie-consent') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'cookie-consent')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow' })
+        const html = await resp.text()
+        const lower = html.toLowerCase()
+
+        const platforms: Array<{ name: string; pattern: string }> = [
+          { name: 'OneTrust', pattern: 'onetrust' },
+          { name: 'CookieBot', pattern: 'cookiebot' },
+          { name: 'CookieYes', pattern: 'cookieyes' },
+          { name: 'Osano', pattern: 'osano' },
+          { name: 'TrustArc', pattern: 'trustarc' },
+          { name: 'Quantcast', pattern: 'quantcast' },
+          { name: 'Didomi', pattern: 'didomi' },
+          { name: 'Iubenda', pattern: 'iubenda' },
+          { name: 'Termly', pattern: 'termly' },
+          { name: 'CookieConsent', pattern: 'cookieconsent' },
+        ]
+
+        const indicators: string[] = []
+        let detectedPlatform: string | null = null
+
+        for (const p of platforms) {
+          if (lower.includes(p.pattern)) {
+            indicators.push(p.name + ' script/reference detected')
+            if (!detectedPlatform) detectedPlatform = p.name
+          }
+        }
+
+        const bannerPatterns = ['cookie-consent', 'cookie-banner', 'cookie-notice', 'cookie-popup', 'cookie-modal', 'cookie-bar', 'gdpr-banner', 'gdpr-consent', 'consent-banner', 'consent-modal', 'cc-banner', 'cc-window']
+        for (const bp of bannerPatterns) {
+          if (lower.includes(bp)) {
+            indicators.push('HTML contains "' + bp + '" class/id')
+          }
+        }
+
+        const gdprSignals: string[] = []
+        if (lower.includes('gdpr')) gdprSignals.push('GDPR reference found in page')
+        if (lower.includes('cookie policy')) gdprSignals.push('Cookie policy reference found')
+        if (lower.includes('privacy policy')) gdprSignals.push('Privacy policy reference found')
+        if (lower.includes('manage cookies')) gdprSignals.push('Manage cookies option found')
+        if (lower.includes('accept cookies') || lower.includes('accept all')) gdprSignals.push('Accept cookies button text found')
+        if (lower.includes('reject cookies') || lower.includes('reject all')) gdprSignals.push('Reject cookies option found')
+
+        const hasConsentBanner = indicators.length > 0 || gdprSignals.length > 0
+        const score = Math.min(100, indicators.length * 25 + gdprSignals.length * 15)
+
+        return withJson({
+          url: normalized,
+          has_consent_banner: hasConsentBanner,
+          detected_platform: detectedPlatform,
+          indicators,
+          gdpr_signals: gdprSignals,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to detect cookie consent'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- TLS Cipher Suite Analyzer ---
+    if (path === '/api/tls-ciphers') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'tls-ciphers')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const hostname = new URL(normalized).hostname
+
+        const result = await new Promise<{ protocol: string; cipher: string; bits: number }>((resolve, reject) => {
+          const socket = tls.connect({ host: hostname, port: 443, servername: hostname, rejectUnauthorized: false }, () => {
+            const cipher = socket.getCipher()
+            const protocol = socket.getProtocol() || 'unknown'
+            socket.destroy()
+            resolve({
+              protocol,
+              cipher: cipher ? cipher.name : 'unknown',
+              bits: cipher ? (cipher as any).bits || 0 : 0,
+            })
+          })
+          socket.on('error', (err) => {
+            socket.destroy()
+            reject(err)
+          })
+          socket.setTimeout(10000, () => {
+            socket.destroy()
+            reject(new Error('TLS connection timeout'))
+          })
+        })
+
+        const weakCiphers = ['RC4', 'DES', '3DES', 'MD5', 'NULL', 'EXPORT']
+        const warnings: string[] = []
+        for (const w of weakCiphers) {
+          if (result.cipher.toUpperCase().includes(w)) {
+            warnings.push('Weak cipher component detected: ' + w)
+          }
+        }
+        if (result.protocol === 'TLSv1' || result.protocol === 'TLSv1.1') {
+          warnings.push('Deprecated TLS protocol: ' + result.protocol)
+        }
+
+        const isSecure = warnings.length === 0 && (result.protocol === 'TLSv1.2' || result.protocol === 'TLSv1.3')
+
+        return withJson({
+          url: normalized,
+          hostname,
+          protocol: result.protocol,
+          cipher: result.cipher,
+          cipher_bits: result.bits,
+          is_secure: isSecure,
+          warnings,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to analyze TLS ciphers'
         return withJson({ error: message }, { status: 502 })
       }
     }
