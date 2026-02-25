@@ -960,6 +960,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/websocket?url=https://example.com'</pre>
       <p><strong>DNS Propagation Checker:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/dns-propagation?url=https://example.com'</pre>
+      <p><strong>Permissions-Policy Analyzer:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/permissions-policy?url=https://example.com'</pre>
+      <p><strong>CORS Tester:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/cors-test?url=https://example.com'</pre>
+      <p><strong>WAF Detector:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/waf?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1831,6 +1837,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/hsts-preload?url=URL</h3><p class="desc">HSTS preload checker — inspects Strict-Transport-Security header for max-age, includeSubDomains, and preload directives. Reports preload readiness and score.</p><pre>curl -s \'http://147.93.131.124/api/hsts-preload?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/hsts-preload?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/websocket?url=URL</h3><p class="desc">WebSocket support detector — checks for Upgrade headers, scans HTML for ws:// and wss:// URLs, detects Socket.IO, SockJS, and SignalR libraries.</p><pre>curl -s \'http://147.93.131.124/api/websocket?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/websocket?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-propagation?url=URL</h3><p class="desc">DNS propagation checker — queries Google, Cloudflare, OpenDNS, and system default resolvers. Compares A records for consistency and propagation status.</p><pre>curl -s \'http://147.93.131.124/api/dns-propagation?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-propagation?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/permissions-policy?url=URL</h3><p class="desc">Permissions-Policy analyzer — parses Permissions-Policy header, lists directives and restricted features with score.</p><pre>curl -s \'http://147.93.131.124/api/permissions-policy?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/permissions-policy?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/cors-test?url=URL</h3><p class="desc">CORS tester — sends OPTIONS preflight request and inspects Access-Control-Allow-Origin, Methods, Headers, and Credentials.</p><pre>curl -s \'http://147.93.131.124/api/cors-test?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/cors-test?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/waf?url=URL</h3><p class="desc">WAF detector — identifies Web Application Firewalls via header fingerprinting (Cloudflare, AWS, Sucuri, Akamai, Imperva, Fastly, Barracuda).</p><pre>curl -s \'http://147.93.131.124/api/waf?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/waf?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -3787,6 +3796,176 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to check DNS propagation'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/permissions-policy') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'permissions-policy')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow' })
+        const raw = resp.headers.get('permissions-policy') || resp.headers.get('feature-policy') || null
+        const directives: Array<{ feature: string; allowlist: string }> = []
+        const restrictedFeatures: string[] = []
+
+        if (raw) {
+          const parts = raw.split(',')
+          for (const part of parts) {
+            const trimmed = part.trim()
+            const eqIdx = trimmed.indexOf('=')
+            if (eqIdx !== -1) {
+              const feature = trimmed.slice(0, eqIdx).trim()
+              const allowlist = trimmed.slice(eqIdx + 1).trim()
+              directives.push({ feature, allowlist })
+              if (allowlist === '()' || allowlist === 'none') {
+                restrictedFeatures.push(feature)
+              }
+            }
+          }
+        }
+
+        const score = raw ? Math.min(100, directives.length * 10) : 0
+
+        return withJson({
+          url: normalized,
+          has_policy: !!raw,
+          raw_header: raw,
+          directives,
+          restricted_features: restrictedFeatures,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check permissions policy'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/cors-test') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'cors-test')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, {
+          method: 'OPTIONS',
+          headers: { 'Origin': 'https://example.com', 'Access-Control-Request-Method': 'GET' },
+        })
+        const acao = resp.headers.get('access-control-allow-origin')
+        const acam = resp.headers.get('access-control-allow-methods')
+        const acah = resp.headers.get('access-control-allow-headers')
+        const acma = resp.headers.get('access-control-max-age')
+        const acac = resp.headers.get('access-control-allow-credentials')
+
+        const allowsAllOrigins = acao === '*'
+        const allowedMethods = acam ? acam.split(',').map(m => m.trim()).filter(Boolean) : []
+        const allowedHeaders = acah ? acah.split(',').map(h => h.trim()).filter(Boolean) : []
+        const maxAge = acma ? parseInt(acma, 10) : null
+        const credentialsAllowed = acac === 'true'
+
+        let score = 0
+        if (acao) score += 25
+        if (acam) score += 25
+        if (acah) score += 25
+        if (!allowsAllOrigins && acao) score += 25
+
+        return withJson({
+          url: normalized,
+          allows_all_origins: allowsAllOrigins,
+          allowed_origins: acao,
+          allowed_methods: allowedMethods,
+          allowed_headers: allowedHeaders,
+          max_age: maxAge,
+          credentials_allowed: credentialsAllowed,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to test CORS'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/waf') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'waf')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow' })
+        const indicators: string[] = []
+        let provider: string | null = null
+
+        const cfRay = resp.headers.get('cf-ray')
+        const server = (resp.headers.get('server') || '').toLowerCase()
+        const xPoweredBy = (resp.headers.get('x-powered-by') || '').toLowerCase()
+        const via = (resp.headers.get('via') || '').toLowerCase()
+
+        if (cfRay) { indicators.push('cf-ray header present'); provider = 'Cloudflare' }
+        if (server.includes('cloudflare')) { indicators.push('server: cloudflare'); provider = provider || 'Cloudflare' }
+        if (resp.headers.get('x-sucuri-id')) { indicators.push('x-sucuri-id header present'); provider = provider || 'Sucuri' }
+        if (resp.headers.get('x-akamai-transformed')) { indicators.push('x-akamai-transformed header present'); provider = provider || 'Akamai' }
+        if (server.includes('akamai')) { indicators.push('server contains akamai'); provider = provider || 'Akamai' }
+        if (resp.headers.get('x-cdn') === 'Incapsula') { indicators.push('x-cdn: Incapsula'); provider = provider || 'Imperva/Incapsula' }
+        if (resp.headers.get('x-iinfo')) { indicators.push('x-iinfo header present'); provider = provider || 'Imperva/Incapsula' }
+        if (server.includes('awselb') || resp.headers.get('x-amzn-requestid')) { indicators.push('AWS load balancer detected'); provider = provider || 'AWS WAF' }
+        if (resp.headers.get('x-amz-cf-id')) { indicators.push('x-amz-cf-id header present'); provider = provider || 'AWS CloudFront' }
+        if (server.includes('barracuda')) { indicators.push('server contains barracuda'); provider = provider || 'Barracuda' }
+        if (via.includes('varnish')) { indicators.push('via contains varnish'); provider = provider || 'Varnish' }
+        if (resp.headers.get('x-fastly-request-id')) { indicators.push('x-fastly-request-id header present'); provider = provider || 'Fastly' }
+
+        const wafDetected = indicators.length > 0
+        const score = wafDetected ? Math.min(100, indicators.length * 50) : 0
+
+        return withJson({
+          url: normalized,
+          waf_detected: wafDetected,
+          provider,
+          indicators,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to detect WAF'
         return withJson({ error: message }, { status: 502 })
       }
     }
