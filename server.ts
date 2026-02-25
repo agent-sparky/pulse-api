@@ -1026,6 +1026,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/cookie-security?url=https://example.com'</pre>
       <p><strong>DNS CAA Record Checker:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/dns-caa?url=https://example.com'</pre>
+      <p><strong>SRI Scanner:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/sri-scan?url=https://example.com'</pre>
+      <p><strong>HSTS Deep Analysis:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/hsts-analysis?url=https://example.com'</pre>
+      <p><strong>DNS MX Record Checker:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/dns-mx?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1930,6 +1936,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/content-type?url=URL</h3><p class="desc">Content-Type sniffer — compares the declared Content-Type response header against the actual body content to detect mismatches between declared and detected types.</p><pre>curl -s \'http://147.93.131.124/api/content-type?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/content-type?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/cookie-security?url=URL</h3><p class="desc">Cookie security audit — parses Set-Cookie headers and evaluates each cookie for security best practices including Secure, HttpOnly, SameSite, Path, and Domain attributes.</p><pre>curl -s \'http://147.93.131.124/api/cookie-security?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/cookie-security?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-caa?url=URL</h3><p class="desc">DNS CAA record checker — queries DNS CAA records for certificate authority authorization, showing which CAs are allowed to issue certificates for the domain.</p><pre>curl -s \'http://147.93.131.124/api/dns-caa?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-caa?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/sri-scan?url=URL</h3><p class="desc">SRI scanner — scans a page for script and stylesheet resources, checking each for Subresource Integrity attributes to detect unprotected external resources.</p><pre>curl -s \'http://147.93.131.124/api/sri-scan?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/sri-scan?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/hsts-analysis?url=URL</h3><p class="desc">HSTS deep analysis — parses the Strict-Transport-Security header to extract max-age, includeSubDomains, and preload directives with compliance scoring.</p><pre>curl -s \'http://147.93.131.124/api/hsts-analysis?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/hsts-analysis?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-mx?url=URL</h3><p class="desc">DNS MX record checker — queries DNS MX records to show email server configuration with priority and exchange fields.</p><pre>curl -s \'http://147.93.131.124/api/dns-mx?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-mx?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -5403,6 +5412,9 @@ const server = Bun.serve({
       addPath('/api/content-type', 'get', 'Content-Type sniffer', [urlParam, optKey])
       addPath('/api/cookie-security', 'get', 'Cookie security audit', [urlParam, optKey])
       addPath('/api/dns-caa', 'get', 'DNS CAA record checker', [urlParam, optKey])
+      addPath('/api/sri-scan', 'get', 'Subresource Integrity scanner', [urlParam, optKey])
+      addPath('/api/hsts-analysis', 'get', 'HSTS deep analysis', [urlParam, optKey])
+      addPath('/api/dns-mx', 'get', 'DNS MX record checker', [urlParam, optKey])
 
       return withJson(spec)
     }
@@ -6029,6 +6041,217 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to check DNS CAA records'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- SRI Scanner ---
+    if (path === '/api/sri-scan') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'sri-scan')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, {
+          signal: AbortSignal.timeout(10000),
+          headers: { 'User-Agent': 'Pulse-Bot/1.0' },
+          redirect: 'follow',
+        })
+        const html = await resp.text()
+
+        const resources: Array<{ tag: string; src: string; has_integrity: boolean; integrity_value: string | null }> = []
+
+        // Match <script src="..."> tags
+        const scriptRegex = /<script\s[^>]*src\s*=\s*["']([^"']+)["'][^>]*>/gi
+        let match: RegExpExecArray | null
+        while ((match = scriptRegex.exec(html)) !== null) {
+          const fullTag = match[0]
+          const src = match[1]
+          const integrityMatch = fullTag.match(/integrity\s*=\s*["']([^"']+)["']/i)
+          resources.push({
+            tag: 'script',
+            src,
+            has_integrity: !!integrityMatch,
+            integrity_value: integrityMatch ? integrityMatch[1] : null,
+          })
+        }
+
+        // Match <link rel="stylesheet" href="..."> tags
+        const linkRegex = /<link\s[^>]*rel\s*=\s*["']stylesheet["'][^>]*>/gi
+        while ((match = linkRegex.exec(html)) !== null) {
+          const fullTag = match[0]
+          const hrefMatch = fullTag.match(/href\s*=\s*["']([^"']+)["']/i)
+          if (!hrefMatch) continue
+          const src = hrefMatch[1]
+          const integrityMatch = fullTag.match(/integrity\s*=\s*["']([^"']+)["']/i)
+          resources.push({
+            tag: 'link',
+            src,
+            has_integrity: !!integrityMatch,
+            integrity_value: integrityMatch ? integrityMatch[1] : null,
+          })
+        }
+
+        const total = resources.length
+        const protectedCount = resources.filter(r => r.has_integrity).length
+        const unprotected = total - protectedCount
+        const score = total === 0 ? 100 : Math.round((protectedCount / total) * 100)
+
+        return withJson({
+          url: normalized,
+          resources,
+          total,
+          protected: protectedCount,
+          unprotected,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to scan for SRI'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- HSTS Deep Analysis ---
+    if (path === '/api/hsts-analysis') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'hsts-analysis')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, {
+          signal: AbortSignal.timeout(10000),
+          headers: { 'User-Agent': 'Pulse-Bot/1.0' },
+          redirect: 'follow',
+        })
+
+        const hstsHeader = resp.headers.get('strict-transport-security')
+        if (!hstsHeader) {
+          return withJson({
+            url: normalized,
+            has_hsts: false,
+            max_age: null,
+            include_subdomains: false,
+            preload: false,
+            max_age_days: null,
+            meets_minimum: false,
+            score: 0,
+          })
+        }
+
+        const maxAgeMatch = hstsHeader.match(/max-age\s*=\s*(\d+)/i)
+        const maxAge = maxAgeMatch ? parseInt(maxAgeMatch[1], 10) : 0
+        const includeSubdomains = /includeSubDomains/i.test(hstsHeader)
+        const preload = /preload/i.test(hstsHeader)
+        const maxAgeDays = Math.round(maxAge / 86400)
+        const meetsMinimum = maxAge >= 31536000
+
+        let score = 0
+        if (maxAge > 0) score += 25
+        if (meetsMinimum) score += 25
+        if (includeSubdomains) score += 25
+        if (preload) score += 25
+
+        return withJson({
+          url: normalized,
+          has_hsts: true,
+          max_age: maxAge,
+          include_subdomains: includeSubdomains,
+          preload,
+          max_age_days: maxAgeDays,
+          meets_minimum: meetsMinimum,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to analyze HSTS'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- DNS MX Record Checker ---
+    if (path === '/api/dns-mx') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'dns-mx')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const domain = new URL(normalized).hostname
+
+        const dohUrl = 'https://cloudflare-dns.com/dns-query?name=' + encodeURIComponent(domain) + '&type=MX'
+        const dohResp = await fetch(dohUrl, {
+          headers: { Accept: 'application/dns-json' },
+          signal: AbortSignal.timeout(10000),
+        })
+        const dohData = await dohResp.json() as { Answer?: Array<{ type: number; data: string }> }
+
+        const mxRecords: Array<{ priority: number; exchange: string }> = []
+        if (dohData.Answer) {
+          for (const ans of dohData.Answer) {
+            if (ans.type === 15) {
+              const parts = ans.data.match(/^(\d+)\s+(.+)$/)
+              if (parts) {
+                mxRecords.push({
+                  priority: parseInt(parts[1], 10),
+                  exchange: parts[2].replace(/\.$/, ''),
+                })
+              }
+            }
+          }
+        }
+
+        mxRecords.sort((a, b) => a.priority - b.priority)
+
+        const hasMx = mxRecords.length > 0
+        const score = hasMx ? 100 : 0
+
+        return withJson({
+          url: normalized,
+          domain,
+          mx_records: mxRecords,
+          has_mx: hasMx,
+          total: mxRecords.length,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check DNS MX records'
         return withJson({ error: message }, { status: 502 })
       }
     }
