@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { resolve as dnsResolve } from 'node:dns/promises'
 import { Database } from 'bun:sqlite'
 import Stripe from 'stripe'
+import nodemailer from 'nodemailer'
 
 const PORT = 3000
 const MAX_REDIRECTS = 5
@@ -11,6 +12,13 @@ const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || ''
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || ''
 const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || ''
 const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null
+
+const SMTP_HOST = process.env.SMTP_HOST || ''
+const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587', 10)
+const SMTP_USER = process.env.SMTP_USER || ''
+const SMTP_PASS = process.env.SMTP_PASS || ''
+const SMTP_FROM = process.env.SMTP_FROM || ''
+const smtpConfigured = !!(SMTP_HOST && SMTP_USER && SMTP_PASS)
 
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -208,6 +216,9 @@ function withCors(body: BodyInit | null, init: ResponseInit = {}): Response {
 function withJson(body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers)
   headers.set('Content-Type', 'application/json')
+  if (!headers.has('Cache-Control')) {
+    headers.set('Cache-Control', 'no-cache')
+  }
 
   return withCors(JSON.stringify(body), {
     ...init,
@@ -567,6 +578,27 @@ function getEndpointRateLimit(
   return { allowed: true, limit, resetAt }
 }
 
+async function sendAlertEmail(to: string, subject: string, body: string): Promise<boolean> {
+  if (!smtpConfigured) {
+    console.log('[email] SMTP not configured, skipping alert to ' + to)
+    return false
+  }
+  try {
+    const transporter = nodemailer.createTransport({
+      host: SMTP_HOST,
+      port: SMTP_PORT,
+      secure: SMTP_PORT === 465,
+      auth: { user: SMTP_USER, pass: SMTP_PASS },
+    })
+    await transporter.sendMail({ from: SMTP_FROM, to, subject, text: body })
+    console.log('[email] Alert sent to ' + to)
+    return true
+  } catch (err) {
+    console.log('[email] Failed to send to ' + to + ': ' + (err instanceof Error ? err.message : 'unknown'))
+    return false
+  }
+}
+
 function dashboardHtml(): string {
   return '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="UTF-8"/>\n<meta name="viewport" content="width=device-width,initial-scale=1.0"/>\n<title>Pulse Dashboard</title>\n<style>\n:root{--bg:#090b10;--panel:#11141d;--text:#f7f9ff;--muted:#9aa4bf;--accent:#39c5ff;--border:#2a3040;--good:#3ddc97;--bad:#ff6378}\n*{box-sizing:border-box}\nbody{margin:0;font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--text);padding:2rem}\n.wrap{max-width:960px;margin:0 auto}\nh1{color:var(--accent);margin:0 0 .5rem}\n.info{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:1rem;margin-bottom:1rem}\n.info span{color:var(--muted);margin-right:1.5rem}\n.info strong{color:var(--text)}\ntable{width:100%;border-collapse:collapse;margin-top:.5rem}\nth,td{text-align:left;padding:.5rem .7rem;border-bottom:1px solid var(--border)}\nth{color:var(--muted);font-size:.85rem;text-transform:uppercase}\ntd{font-size:.9rem}\n.good{color:var(--good)}.bad{color:var(--bad)}\nform.create{display:grid;grid-template-columns:2fr 1fr 2fr auto;gap:.5rem;margin:1rem 0}\ninput,button{border-radius:8px;padding:.6rem .8rem;font-size:.9rem;border:1px solid var(--border);background:var(--panel);color:var(--text)}\nbutton{background:linear-gradient(120deg,var(--accent),#7ce0ff);color:#071120;border:0;cursor:pointer;font-weight:600}\nbutton:hover{filter:brightness(1.05)}\n.section{margin-top:1.5rem}\n.section h2{margin:0 0 .5rem;font-size:1.1rem}\n.msg{color:var(--muted);padding:1rem;text-align:center}\na{color:var(--accent);text-decoration:none}\na:hover{text-decoration:underline}\n.del{background:var(--bad);color:#fff;padding:.3rem .6rem;border-radius:6px;font-size:.8rem;cursor:pointer;border:0}\n.nav{display:flex;gap:1rem;margin-bottom:1rem}\n#key-input{display:flex;gap:.5rem;margin-bottom:1.5rem}\n#key-input input{flex:1}\n</style>\n</head>\n<body>\n<div class="wrap">\n<div class="nav"><a href="/">&larr; Home</a><h1>Pulse Dashboard</h1></div>\n<div id="key-input"><input id="api-key" type="text" placeholder="Enter your API key"/><button onclick="loadDashboard()">Load</button></div>\n<div id="account" class="info" style="display:none"></div>\n<div class="section"><h2>Monitors</h2>\n<form class="create" id="monitor-form" style="display:none">\n<input id="mon-url" placeholder="https://example.com" required/>\n<input id="mon-interval" type="number" value="5" min="1" max="60" placeholder="min"/>\n<input id="mon-alert" placeholder="alert webhook URL (optional)"/>\n<button type="submit">Create Monitor</button>\n</form>\n<div id="monitors"><p class="msg">Enter your API key above.</p></div>\n</div>\n<div class="section"><h2>Recent Checks</h2>\n<div id="checks"><p class="msg">Enter your API key above.</p></div>\n</div>\n</div>\n<script>\nvar KEY=""\nfunction getKey(){KEY=document.getElementById("api-key").value.trim();return KEY}\nfunction loadDashboard(){if(!getKey())return;loadAccount();loadMonitors();loadChecks()}\nfunction loadAccount(){\nfetch("/api/account",{headers:{"X-API-Key":KEY}}).then(function(r){return r.json()}).then(function(d){\nvar el=document.getElementById("account");el.style.display="block";\nel.innerHTML="<span>Email: <strong>"+d.email+"</strong></span><span>Tier: <strong>"+d.tier+"</strong></span><span>Checks today: <strong>"+d.checksToday+"/"+d.limitPerDay+"</strong></span>"\n}).catch(function(){})}\nfunction loadMonitors(){\nfetch("/api/monitors",{headers:{"X-API-Key":KEY}}).then(function(r){return r.json()}).then(function(list){\nvar el=document.getElementById("monitors");\ndocument.getElementById("monitor-form").style.display="grid";\nif(!list.length){el.innerHTML="<p class=\\"msg\\">No monitors yet.</p>";return}\nvar h="<table><tr><th>ID</th><th>URL</th><th>Interval</th><th>Status</th><th>Alert URL</th><th></th></tr>";\nfor(var i=0;i<list.length;i++){var m=list[i];var cls=m.last_status_code===200?"good":"bad";\nh+="<tr><td>"+m.id+"</td><td>"+m.url+"</td><td>"+m.interval_minutes+"m</td><td class=\\""+cls+"\\">"+((m.last_status_code)||"pending")+"</td><td>"+(m.alert_url||"none")+"</td><td><button class=\\"del\\" onclick=\\"delMon("+m.id+")\\">Delete</button></td></tr>"}\nh+="</table>";el.innerHTML=h\n}).catch(function(){})}\nfunction loadChecks(){\nfetch("/api/history",{headers:{"X-API-Key":KEY}}).then(function(r){return r.json()}).then(function(list){\nvar el=document.getElementById("checks");\nif(!list.length){el.innerHTML="<p class=\\"msg\\">No checks yet.</p>";return}\nvar h="<table><tr><th>URL</th><th>Status</th><th>Time</th><th>Date</th></tr>";\nfor(var i=0;i<list.length;i++){var c=list[i];var cls=c.status_code===200?"good":"bad";\nh+="<tr><td>"+c.url+"</td><td class=\\""+cls+"\\">"+c.status_code+"</td><td>"+c.response_time_ms+"ms</td><td>"+c.created_at+"</td></tr>"}\nh+="</table>";el.innerHTML=h\n}).catch(function(){})}\nfunction delMon(id){\nfetch("/api/monitors/"+id,{method:"DELETE",headers:{"X-API-Key":KEY}}).then(function(){loadMonitors()}).catch(function(){})}\ndocument.getElementById("monitor-form").addEventListener("submit",function(e){\ne.preventDefault();\nvar u=document.getElementById("mon-url").value.trim();\nvar iv=parseInt(document.getElementById("mon-interval").value)||5;\nvar al=document.getElementById("mon-alert").value.trim()||null;\nfetch("/api/monitors",{method:"POST",headers:{"X-API-Key":KEY,"Content-Type":"application/json"},body:JSON.stringify({url:u,interval_minutes:iv,alert_url:al})}).then(function(r){return r.json()}).then(function(){loadMonitors();document.getElementById("mon-url").value=""}).catch(function(){})})\nvar stored=localStorage.getItem("pulse_api_key");\nif(stored){document.getElementById("api-key").value=stored;loadDashboard()}\nfunction getKey(){KEY=document.getElementById("api-key").value.trim();localStorage.setItem("pulse_api_key",KEY);return KEY}\n</script>\n</body>\n</html>'
 }
@@ -857,6 +889,14 @@ function landingHtml(): string {
       <pre>curl -s -X POST 'http://147.93.131.124/api/test-webhook' \
   -H 'Content-Type: application/json' \
   -d '{"url":"https://httpbin.org/post"}'</pre>
+      <p><strong>Batch Analysis:</strong></p>
+      <pre>curl -s -X POST 'http://147.93.131.124/api/batch' \
+  -H 'Content-Type: application/json' \
+  -d '{"urls":["https://example.com","https://google.com"]}'</pre>
+      <p><strong>Uptime Badge:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/badge/1'
+# Returns SVG image — embed in README:
+# ![Uptime](http://147.93.131.124/api/badge/1)</pre>
     </section>
 
     <section class="section">
@@ -1034,7 +1074,7 @@ const server = Bun.serve({
 
       return withCors(statusPage, {
         status: 200,
-        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=60' },
       })
     }
 
@@ -1045,7 +1085,7 @@ const server = Bun.serve({
 
       return withCors(dashboardHtml(), {
         status: 200,
-        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=60' },
       })
     }
 
@@ -1058,6 +1098,7 @@ const server = Bun.serve({
         status: 200,
         headers: {
           'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'public, max-age=60',
         },
       })
     }
@@ -1067,17 +1108,10 @@ const server = Bun.serve({
         return withCors(JSON.stringify({ error: 'Method Not Allowed' }), { status: 405 })
       }
 
-      return withCors(
-        JSON.stringify({
-          status: 'ok',
-          uptime: process.uptime(),
-        }),
-        {
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-      )
+      return withJson({
+        status: 'ok',
+        uptime: process.uptime(),
+      })
     }
 
     if (path === '/api/register') {
@@ -1569,6 +1603,69 @@ const server = Bun.serve({
       }
     }
 
+    if (path === '/api/batch') {
+      if (request.method !== 'POST') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'batch')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      const payload = await request.json().catch(() => null)
+      const urls = payload && Array.isArray(payload.urls) ? payload.urls : null
+      if (!urls || urls.length === 0 || urls.length > 10) {
+        return withJson({ error: 'urls array required, max 10' }, { status: 400 })
+      }
+
+      const results: Array<{ url: string; statusCode: number; responseTimeMs: number; error?: string }> = []
+      for (const u of urls) {
+        if (typeof u !== 'string') continue
+        const r = await checkUrl(u)
+        results.push({ url: r.url, statusCode: r.statusCode, responseTimeMs: r.responseTimeMs, ...(r.error ? { error: r.error } : {}) })
+      }
+
+      return withJson({ results, total: urls.length, completed: results.length })
+    }
+
+    const badgeMatch = path.match(/^\/api\/badge\/(\d+)$/)
+    if (badgeMatch) {
+      if (request.method !== 'GET') {
+        return withCors('Method Not Allowed', { status: 405 })
+      }
+
+      const monitorId = Number(badgeMatch[1])
+      const monitor = db.prepare('SELECT * FROM monitors WHERE id = ?').get(monitorId) as MonitorRow | null
+      if (!monitor) {
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="20"><rect width="120" height="20" rx="3" fill="#555"/><text x="60" y="14" fill="#fff" font-family="sans-serif" font-size="11" text-anchor="middle">not found</text></svg>`
+        return withCors(svg, { status: 404, headers: { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'no-cache, max-age=300' } })
+      }
+
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+      const monUrl = monitor.url
+      const altUrl = monUrl.endsWith('/') ? monUrl.slice(0, -1) : monUrl + '/'
+      const checks = db.prepare('SELECT status_code FROM checks WHERE (url = ? OR url = ?) AND created_at >= ?').all(monUrl, altUrl, since) as Array<{ status_code: number }>
+
+      let uptimePct = 100
+      if (checks.length > 0) {
+        const okCount = checks.filter(c => c.status_code === 200).length
+        uptimePct = Math.round((okCount / checks.length) * 1000) / 10
+      }
+
+      let color = '#4c1'
+      if (uptimePct < 99) color = '#dfb317'
+      if (uptimePct < 95) color = '#e05d44'
+
+      const label = 'uptime'
+      const value = uptimePct + '%'
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="110" height="20"><linearGradient id="b" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient><clipPath id="a"><rect width="110" height="20" rx="3" fill="#fff"/></clipPath><g clip-path="url(#a)"><rect width="52" height="20" fill="#555"/><rect x="52" width="58" height="20" fill="${color}"/><rect width="110" height="20" fill="url(#b)"/></g><g fill="#fff" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="11"><text x="26" y="15" fill="#010101" fill-opacity=".3">${label}</text><text x="26" y="14">${label}</text><text x="80" y="15" fill="#010101" fill-opacity=".3">${value}</text><text x="80" y="14">${value}</text></g></svg>`
+
+      return withCors(svg, { status: 200, headers: { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'no-cache, max-age=300' } })
+    }
+
     return withCors('Not Found', { status: 404 })
   },
 })
@@ -1598,30 +1695,36 @@ setInterval(async () => {
         const oldCode = mon.last_status_code as number | null
 
         if (mon.alert_url) {
+          const alertPayload = (status: string, code: number) => ({
+            monitor_id: mon.id,
+            url: mon.url,
+            status,
+            status_code: code,
+            checked_at: new Date().toISOString(),
+          })
+
           if (oldCode === 200 && newCode !== 200) {
-            fetch(mon.alert_url, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                monitor_id: mon.id,
-                url: mon.url,
-                status: 'down',
-                status_code: newCode,
-                checked_at: new Date().toISOString(),
-              }),
-            }).catch(() => {})
+            if (mon.alert_url.startsWith('mailto:')) {
+              const email = mon.alert_url.slice(7)
+              sendAlertEmail(email, '[Pulse] ' + mon.url + ' is DOWN', 'Monitor ' + mon.id + ' detected ' + mon.url + ' is DOWN (status ' + newCode + ') at ' + new Date().toISOString()).catch(() => {})
+            } else {
+              fetch(mon.alert_url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(alertPayload('down', newCode)),
+              }).catch(() => {})
+            }
           } else if (oldCode !== null && oldCode !== 200 && newCode === 200) {
-            fetch(mon.alert_url, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                monitor_id: mon.id,
-                url: mon.url,
-                status: 'up',
-                status_code: 200,
-                checked_at: new Date().toISOString(),
-              }),
-            }).catch(() => {})
+            if (mon.alert_url.startsWith('mailto:')) {
+              const email = mon.alert_url.slice(7)
+              sendAlertEmail(email, '[Pulse] ' + mon.url + ' is UP', 'Monitor ' + mon.id + ' detected ' + mon.url + ' is back UP (status 200) at ' + new Date().toISOString()).catch(() => {})
+            } else {
+              fetch(mon.alert_url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(alertPayload('up', 200)),
+              }).catch(() => {})
+            }
           }
         }
 
