@@ -924,6 +924,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/cookies?url=https://example.com'</pre>
       <p><strong>Page Weight Analyzer:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/weight?url=https://example.com'</pre>
+      <p><strong>Carbon Footprint Estimator:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/carbon?url=https://example.com'</pre>
+      <p><strong>Link Checker:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/links?url=https://example.com'</pre>
+      <p><strong>Meta Tag Validator:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/meta?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1777,6 +1783,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/accessibility?url=URL</h3><p class="desc">Accessibility audit — checks for missing alt attributes, missing lang, empty links, missing form labels, skip navigation, ARIA landmarks, and h1. Returns issues array and score.</p><pre>curl -s \'http://147.93.131.124/api/accessibility?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/accessibility?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/cookies?url=URL</h3><p class="desc">Cookie scanner — extracts and classifies all Set-Cookie headers. Identifies tracking, session, and persistent cookies with secure/httpOnly/sameSite flags.</p><pre>curl -s \'http://147.93.131.124/api/cookies?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/cookies?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/weight?url=URL</h3><p class="desc">Page weight analyzer — calculates HTML size, counts scripts, stylesheets, images, fonts, and iframes. Returns resource breakdown and estimated weight.</p><pre>curl -s \'http://147.93.131.124/api/weight?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/weight?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/carbon?url=URL</h3><p class="desc">Carbon footprint estimator — calculates page transfer size and estimates CO2 emissions per page view. Rates pages as green, average, or dirty.</p><pre>curl -s \'http://147.93.131.124/api/carbon?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/carbon?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/links?url=URL</h3><p class="desc">Link checker — extracts all anchor tags from a page and classifies each link as internal or external.</p><pre>curl -s \'http://147.93.131.124/api/links?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/links?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/meta?url=URL</h3><p class="desc">Meta tag validator — checks Open Graph, Twitter Card, and standard meta tags. Reports missing tags and computes a completeness score.</p><pre>curl -s \'http://147.93.131.124/api/meta?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/meta?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -2520,6 +2529,189 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to analyze page weight'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/carbon') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'carbon')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { signal: AbortSignal.timeout(15000) })
+        const body = await resp.arrayBuffer()
+        const transferSizeBytes = body.byteLength
+        const transferSizeKB = transferSizeBytes / 1024
+        const co2Grams = Math.round(transferSizeKB * 0.0002 * 1000 * 100) / 100
+        let rating = 'average'
+        if (co2Grams < 0.5) rating = 'green'
+        else if (co2Grams > 1.0) rating = 'dirty'
+        const cleanerThanPercent = co2Grams < 0.5 ? 85 : co2Grams < 1.0 ? 50 : 15
+
+        return withJson({
+          url: normalized,
+          transfer_size_bytes: transferSizeBytes,
+          co2_grams: co2Grams,
+          rating,
+          cleaner_than_percent: cleanerThanPercent,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to estimate carbon footprint'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/links') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'links')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { signal: AbortSignal.timeout(15000) })
+        const html = await resp.text()
+        const targetHost = new URL(normalized).hostname
+        const linkRegex = /<a\b[^>]*href\s*=\s*["']([^"'#][^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi
+        const links: Array<{ href: string; text: string; type: string }> = []
+        let match
+        while ((match = linkRegex.exec(html)) !== null) {
+          const href = match[1].trim()
+          const text = match[2].replace(/<[^>]*>/g, '').trim()
+          let type = 'external'
+          try {
+            const linkUrl = new URL(href, normalized)
+            if (linkUrl.hostname === targetHost) type = 'internal'
+          } catch {
+            type = 'internal'
+          }
+          links.push({ href, text, type })
+        }
+        const internal = links.filter(l => l.type === 'internal').length
+        const external = links.filter(l => l.type === 'external').length
+
+        return withJson({
+          url: normalized,
+          links,
+          total: links.length,
+          internal,
+          external,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to extract links'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/meta') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'meta')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { signal: AbortSignal.timeout(15000) })
+        const html = await resp.text()
+
+        const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
+        const title = titleMatch ? titleMatch[1].trim() : null
+
+        const descMatch = html.match(/<meta\b[^>]*name\s*=\s*["']description["'][^>]*content\s*=\s*["']([^"']*)["']/i)
+          || html.match(/<meta\b[^>]*content\s*=\s*["']([^"']*)["'][^>]*name\s*=\s*["']description["']/i)
+        const description = descMatch ? descMatch[1].trim() : null
+
+        const ogExtract = (prop: string): string | null => {
+          const re = new RegExp('<meta\\b[^>]*property\\s*=\\s*["\']og:' + prop + '["\'][^>]*content\\s*=\\s*["\']([^"\']*)["\']', 'i')
+          const re2 = new RegExp('<meta\\b[^>]*content\\s*=\\s*["\']([^"\']*)["\'][^>]*property\\s*=\\s*["\']og:' + prop + '["\']', 'i')
+          const m = html.match(re) || html.match(re2)
+          return m ? m[1].trim() : null
+        }
+
+        const twExtract = (name: string): string | null => {
+          const re = new RegExp('<meta\\b[^>]*name\\s*=\\s*["\']twitter:' + name + '["\'][^>]*content\\s*=\\s*["\']([^"\']*)["\']', 'i')
+          const re2 = new RegExp('<meta\\b[^>]*content\\s*=\\s*["\']([^"\']*)["\'][^>]*name\\s*=\\s*["\']twitter:' + name + '["\']', 'i')
+          const m = html.match(re) || html.match(re2)
+          return m ? m[1].trim() : null
+        }
+
+        const og = {
+          title: ogExtract('title'),
+          description: ogExtract('description'),
+          image: ogExtract('image'),
+          url: ogExtract('url'),
+        }
+
+        const twitter = {
+          card: twExtract('card'),
+          title: twExtract('title'),
+          description: twExtract('description'),
+          image: twExtract('image'),
+        }
+
+        const missing: string[] = []
+        if (!title) missing.push('title')
+        if (!description) missing.push('description')
+        if (!og.title) missing.push('og:title')
+        if (!og.description) missing.push('og:description')
+        if (!og.image) missing.push('og:image')
+        if (!og.url) missing.push('og:url')
+        if (!twitter.card) missing.push('twitter:card')
+        if (!twitter.title) missing.push('twitter:title')
+        if (!twitter.description) missing.push('twitter:description')
+        if (!twitter.image) missing.push('twitter:image')
+
+        const totalFields = 10
+        const presentFields = totalFields - missing.length
+        const score = Math.round((presentFields / totalFields) * 100)
+
+        return withJson({
+          url: normalized,
+          title,
+          description,
+          og,
+          twitter,
+          missing,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to validate meta tags'
         return withJson({ error: message }, { status: 502 })
       }
     }
