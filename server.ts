@@ -1050,6 +1050,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/dns-ptr?ip=8.8.8.8'</pre>
       <p><strong>TLSA/DANE Record Checker:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/dns-tlsa?url=https://example.com'</pre>
+      <p><strong>NAPTR Record Lookup:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/dns-naptr?url=https://example.com'</pre>
+      <p><strong>SRV Record Checker:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/dns-srv?url=https://example.com&service=_http._tcp'</pre>
+      <p><strong>DS/DNSKEY Record Checker:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/dns-ds?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1966,6 +1972,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-soa?url=URL</h3><p class="desc">SOA record analyzer — parses DNS SOA records for zone authority info including primary nameserver, admin email, serial number, refresh/retry/expire timers, and minimum TTL.</p><pre>curl -s \'http://147.93.131.124/api/dns-soa?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-soa?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-ptr?ip=IP</h3><p class="desc">PTR reverse lookup — performs reverse DNS lookup on an IPv4 address to find associated hostnames via in-addr.arpa PTR records.</p><pre>curl -s \'http://147.93.131.124/api/dns-ptr?ip=8.8.8.8\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-ptr?ip=8.8.8.8\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-tlsa?url=URL</h3><p class="desc">TLSA/DANE record checker — queries DNS TLSA records for _443._tcp subdomain to check DANE certificate pinning with usage, selector, matching type, and certificate data.</p><pre>curl -s \'http://147.93.131.124/api/dns-tlsa?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-tlsa?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-naptr?url=URL</h3><p class="desc">NAPTR record lookup — queries DNS NAPTR records for URI/SIP service discovery, returning order, preference, flags, service, regexp, and replacement fields.</p><pre>curl -s \'http://147.93.131.124/api/dns-naptr?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-naptr?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-srv?url=URL&service=SERVICE</h3><p class="desc">SRV record checker — queries DNS SRV records for service location discovery, returning priority, weight, port, and target for a given service type.</p><pre>curl -s \'http://147.93.131.124/api/dns-srv?url=https://example.com&service=_http._tcp\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-srv?url=https://example.com&service=_http._tcp\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-ds?url=URL</h3><p class="desc">DS/DNSKEY record checker — queries DNSSEC DS and DNSKEY records to verify zone signing status, key tags, algorithms, and digest types.</p><pre>curl -s \'http://147.93.131.124/api/dns-ds?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-ds?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -5451,6 +5460,9 @@ const server = Bun.serve({
       addPath('/api/dns-soa', 'get', 'DNS SOA record analyzer', [urlParam, optKey])
       addPath('/api/dns-ptr', 'get', 'DNS PTR reverse lookup', [{ name: 'ip', in_: 'query', required: true, schema: { type: 'string' } }, optKey])
       addPath('/api/dns-tlsa', 'get', 'DNS TLSA/DANE record checker', [urlParam, optKey])
+      addPath('/api/dns-naptr', 'get', 'DNS NAPTR record lookup', [urlParam, optKey])
+      addPath('/api/dns-srv', 'get', 'DNS SRV record checker', [urlParam, { name: 'service', in_: 'query', required: false, schema: { type: 'string' } }, optKey])
+      addPath('/api/dns-ds', 'get', 'DNS DS/DNSKEY record checker', [urlParam, optKey])
 
       return withJson(spec)
     }
@@ -6849,6 +6861,217 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to check DNS TLSA records'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- DNS NAPTR Record Lookup ---
+    if (path === '/api/dns-naptr') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'dns-naptr')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const domain = new URL(normalized).hostname
+
+        const dohUrl = 'https://cloudflare-dns.com/dns-query?name=' + encodeURIComponent(domain) + '&type=NAPTR'
+        const dohResp = await fetch(dohUrl, {
+          headers: { Accept: 'application/dns-json' },
+          signal: AbortSignal.timeout(10000),
+        })
+        const dohData = await dohResp.json() as { Answer?: Array<{ type: number; data: string }> }
+
+        const records: Array<{ order: number; preference: number; flags: string; service: string; regexp: string; replacement: string }> = []
+        if (dohData.Answer) {
+          for (const ans of dohData.Answer) {
+            if (ans.type === 35) {
+              const parts = ans.data.split(/\s+/)
+              if (parts.length >= 6) {
+                records.push({
+                  order: parseInt(parts[0], 10),
+                  preference: parseInt(parts[1], 10),
+                  flags: parts[2].replace(/^"|"$/g, ''),
+                  service: parts[3].replace(/^"|"$/g, ''),
+                  regexp: parts[4].replace(/^"|"$/g, ''),
+                  replacement: parts.slice(5).join(' '),
+                })
+              }
+            }
+          }
+        }
+
+        return withJson({
+          url: normalized,
+          domain,
+          has_naptr: records.length > 0,
+          records,
+          total: records.length,
+          score: records.length > 0 ? 100 : 50,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check DNS NAPTR records'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- DNS SRV Record Checker ---
+    if (path === '/api/dns-srv') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'dns-srv')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const domain = new URL(normalized).hostname
+        const service = url.searchParams.get('service') || '_http._tcp'
+
+        const srvName = service + '.' + domain
+        const dohUrl = 'https://cloudflare-dns.com/dns-query?name=' + encodeURIComponent(srvName) + '&type=SRV'
+        const dohResp = await fetch(dohUrl, {
+          headers: { Accept: 'application/dns-json' },
+          signal: AbortSignal.timeout(10000),
+        })
+        const dohData = await dohResp.json() as { Answer?: Array<{ type: number; data: string }> }
+
+        const records: Array<{ priority: number; weight: number; port: number; target: string }> = []
+        if (dohData.Answer) {
+          for (const ans of dohData.Answer) {
+            if (ans.type === 33) {
+              const parts = ans.data.split(/\s+/)
+              if (parts.length >= 4) {
+                records.push({
+                  priority: parseInt(parts[0], 10),
+                  weight: parseInt(parts[1], 10),
+                  port: parseInt(parts[2], 10),
+                  target: parts[3],
+                })
+              }
+            }
+          }
+        }
+
+        return withJson({
+          url: normalized,
+          domain,
+          service,
+          has_srv: records.length > 0,
+          records,
+          total: records.length,
+          score: records.length > 0 ? 100 : 50,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check DNS SRV records'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- DNS DS/DNSKEY Record Checker ---
+    if (path === '/api/dns-ds') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'dns-ds')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const domain = new URL(normalized).hostname
+
+        const dsUrl = 'https://cloudflare-dns.com/dns-query?name=' + encodeURIComponent(domain) + '&type=DS'
+        const dnskeyUrl = 'https://cloudflare-dns.com/dns-query?name=' + encodeURIComponent(domain) + '&type=DNSKEY'
+
+        const [dsResp, dnskeyResp] = await Promise.all([
+          fetch(dsUrl, { headers: { Accept: 'application/dns-json' }, signal: AbortSignal.timeout(10000) }),
+          fetch(dnskeyUrl, { headers: { Accept: 'application/dns-json' }, signal: AbortSignal.timeout(10000) }),
+        ])
+
+        const dsData = await dsResp.json() as { Answer?: Array<{ type: number; data: string }> }
+        const dnskeyData = await dnskeyResp.json() as { Answer?: Array<{ type: number; data: string }> }
+
+        const dsRecords: Array<{ key_tag: number; algorithm: string; digest_type: number; digest: string }> = []
+        if (dsData.Answer) {
+          for (const ans of dsData.Answer) {
+            if (ans.type === 43) {
+              const parts = ans.data.split(/\s+/)
+              if (parts.length >= 4) {
+                dsRecords.push({
+                  key_tag: parseInt(parts[0], 10),
+                  algorithm: parts[1],
+                  digest_type: parseInt(parts[2], 10),
+                  digest: parts.slice(3).join(''),
+                })
+              }
+            }
+          }
+        }
+
+        const dnskeyRecords: Array<{ flags: number; protocol: number; algorithm: string; public_key: string }> = []
+        if (dnskeyData.Answer) {
+          for (const ans of dnskeyData.Answer) {
+            if (ans.type === 48) {
+              const parts = ans.data.split(/\s+/)
+              if (parts.length >= 4) {
+                dnskeyRecords.push({
+                  flags: parseInt(parts[0], 10),
+                  protocol: parseInt(parts[1], 10),
+                  algorithm: parts[2],
+                  public_key: parts.slice(3).join(''),
+                })
+              }
+            }
+          }
+        }
+
+        const hasDs = dsRecords.length > 0
+        const hasDnskey = dnskeyRecords.length > 0
+
+        return withJson({
+          url: normalized,
+          domain,
+          has_ds: hasDs,
+          has_dnskey: hasDnskey,
+          ds_records: dsRecords,
+          dnskey_records: dnskeyRecords,
+          dnssec_enabled: hasDs || hasDnskey,
+          score: (hasDs || hasDnskey) ? 100 : 50,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check DNS DS/DNSKEY records'
         return withJson({ error: message }, { status: 502 })
       }
     }
