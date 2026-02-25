@@ -1008,6 +1008,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/rate-limits' -H 'X-API-Key: YOUR_KEY'</pre>
       <p><strong>IP Geolocation:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/geoip?url=https://example.com'</pre>
+      <p><strong>URL Metadata Preview:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/screenshot?url=https://example.com'</pre>
+      <p><strong>Sitemap Generator:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/sitemap-gen?url=https://example.com'</pre>
+      <p><strong>DNS over HTTPS:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/doh?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1903,6 +1909,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/openapi</h3><p class="desc">OpenAPI 3.0 specification — returns a machine-readable JSON spec listing all 75+ endpoints with parameters and response schemas.</p><pre>curl -s \'http://147.93.131.124/api/openapi\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/openapi\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/rate-limits</h3><p class="desc">Rate limit dashboard — returns per-endpoint rate limit status for authenticated users including tier, limits, and usage counts. Requires X-API-Key header.</p><pre>curl -s \'http://147.93.131.124/api/rate-limits\' -H \'X-API-Key: YOUR_KEY\'</pre></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/geoip?url=URL</h3><p class="desc">IP geolocation — resolves a domain to its IP address and returns geographic location data including country, region, city, coordinates, ISP, and organization.</p><pre>curl -s \'http://147.93.131.124/api/geoip?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/geoip?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/screenshot?url=URL</h3><p class="desc">URL metadata preview — fetches a URL and extracts title, description meta tag, and HTTP status code for quick site previews.</p><pre>curl -s \'http://147.93.131.124/api/screenshot?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/screenshot?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/sitemap-gen?url=URL</h3><p class="desc">Sitemap generator — crawls a page, extracts same-domain links, deduplicates and sorts them, and generates a valid XML sitemap.</p><pre>curl -s \'http://147.93.131.124/api/sitemap-gen?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/sitemap-gen?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/doh?url=URL</h3><p class="desc">DNS over HTTPS lookup — queries Cloudflare DoH resolver for A and AAAA records with TTL values for any domain.</p><pre>curl -s \'http://147.93.131.124/api/doh?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/doh?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -5367,6 +5376,9 @@ const server = Bun.serve({
       addPath('/api/openapi', 'get', 'OpenAPI 3.0 specification')
       addPath('/api/rate-limits', 'get', 'Rate limit status for authenticated user', [], true)
       addPath('/api/geoip', 'get', 'IP geolocation lookup', [urlParam, optKey])
+      addPath('/api/screenshot', 'get', 'URL metadata preview', [urlParam, optKey])
+      addPath('/api/sitemap-gen', 'get', 'Sitemap generator', [urlParam, optKey])
+      addPath('/api/doh', 'get', 'DNS over HTTPS lookup', [urlParam, optKey])
 
       return withJson(spec)
     }
@@ -5455,6 +5467,165 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to resolve IP geolocation'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- URL Screenshot (Metadata Preview) ---
+    if (path === '/api/screenshot') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'screenshot')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow', signal: AbortSignal.timeout(10000) })
+        const html = await resp.text()
+        const statusCode = resp.status
+
+        const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i)
+        const title = titleMatch ? titleMatch[1].trim() : null
+
+        const descMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["']/i)
+          || html.match(/<meta[^>]+content=["']([^"']*)["'][^>]+name=["']description["']/i)
+        const description = descMatch ? descMatch[1].trim() : null
+
+        return withJson({
+          url: normalized,
+          title,
+          description,
+          status_code: statusCode,
+          screenshot_available: false,
+          note: 'Metadata preview mode',
+          score: 100,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to fetch URL metadata'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- Sitemap Generator ---
+    if (path === '/api/sitemap-gen') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'sitemap-gen')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const baseUrl = new URL(normalized)
+        const baseHostname = baseUrl.hostname
+
+        const resp = await fetch(normalized, { redirect: 'follow', signal: AbortSignal.timeout(10000) })
+        const html = await resp.text()
+
+        const linkRegex = /<a[^>]+href=["']([^"'#]+)["']/gi
+        const seen = new Set<string>()
+        let match: RegExpExecArray | null
+        while ((match = linkRegex.exec(html)) !== null) {
+          try {
+            const href = match[1].trim()
+            let absolute: URL
+            if (href.startsWith('http://') || href.startsWith('https://')) {
+              absolute = new URL(href)
+            } else if (href.startsWith('/')) {
+              absolute = new URL(href, normalized)
+            } else {
+              continue
+            }
+            if (absolute.hostname === baseHostname) {
+              seen.add(absolute.origin + absolute.pathname)
+            }
+          } catch {}
+        }
+
+        const links = Array.from(seen).sort()
+        const sitemapEntries = links.map(l => '  <url><loc>' + l + '</loc></url>').join('\n')
+        const sitemapXml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' + sitemapEntries + '\n</urlset>'
+
+        return withJson({
+          url: normalized,
+          pages_found: links.length,
+          sitemap_xml: sitemapXml,
+          links,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to generate sitemap'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- DNS over HTTPS ---
+    if (path === '/api/doh') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'doh')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const hostname = new URL(normalized).hostname
+
+        const [aResp, aaaaResp] = await Promise.all([
+          fetch('https://cloudflare-dns.com/dns-query?name=' + hostname + '&type=A', { headers: { Accept: 'application/dns-json' }, signal: AbortSignal.timeout(10000) }),
+          fetch('https://cloudflare-dns.com/dns-query?name=' + hostname + '&type=AAAA', { headers: { Accept: 'application/dns-json' }, signal: AbortSignal.timeout(10000) }),
+        ])
+
+        const aData = (await aResp.json()) as any
+        const aaaaData = (await aaaaResp.json()) as any
+
+        const aRecords = (aData.Answer || []).filter((r: any) => r.type === 1).map((r: any) => r.data)
+        const aaaaRecords = (aaaaData.Answer || []).filter((r: any) => r.type === 28).map((r: any) => r.data)
+        const ttl = (aData.Answer && aData.Answer[0]?.TTL) || (aaaaData.Answer && aaaaData.Answer[0]?.TTL) || 0
+
+        return withJson({
+          url: normalized,
+          domain: hostname,
+          resolver: 'cloudflare',
+          records: {
+            A: aRecords,
+            AAAA: aaaaRecords,
+          },
+          ttl,
+          score: 100,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to perform DNS over HTTPS lookup'
         return withJson({ error: message }, { status: 502 })
       }
     }
