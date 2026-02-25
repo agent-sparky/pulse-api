@@ -1002,6 +1002,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/analytics' -H 'X-API-Key: YOUR_KEY'</pre>
       <p><strong>Webhook Retry:</strong></p>
       <pre>curl -s -X POST 'http://147.93.131.124/api/webhook-retry' -H 'Content-Type: application/json' -d '{"url":"https://httpbin.org/post","payload":{"test":true}}'</pre>
+      <p><strong>OpenAPI Spec:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/openapi'</pre>
+      <p><strong>Rate Limits:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/rate-limits' -H 'X-API-Key: YOUR_KEY'</pre>
+      <p><strong>IP Geolocation:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/geoip?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1894,6 +1900,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/jwt-decode?url=URL</h3><p class="desc">JWT token decoder — scans response headers and body for JWT tokens, decodes header and payload segments, extracts algorithm, issuer, subject, expiry, and issued-at claims.</p><pre>curl -s \'http://147.93.131.124/api/jwt-decode?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/jwt-decode?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/analytics</h3><p class="desc">API usage analytics — returns per-user check counts, top URLs, and usage breakdown by day and week. Requires X-API-Key header.</p><pre>curl -s \'http://147.93.131.124/api/analytics\' -H \'X-API-Key: YOUR_KEY\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/webhook-retry</h3><p class="desc">Webhook retry — replays a webhook delivery to a URL with JSON payload and exponential backoff retries on failure.</p><pre>curl -s -X POST \'http://147.93.131.124/api/webhook-retry\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post","payload":{"test":true}}\'</pre><button class="try-btn" onclick="tryWebhookRetry(this)">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/openapi</h3><p class="desc">OpenAPI 3.0 specification — returns a machine-readable JSON spec listing all 75+ endpoints with parameters and response schemas.</p><pre>curl -s \'http://147.93.131.124/api/openapi\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/openapi\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/rate-limits</h3><p class="desc">Rate limit dashboard — returns per-endpoint rate limit status for authenticated users including tier, limits, and usage counts. Requires X-API-Key header.</p><pre>curl -s \'http://147.93.131.124/api/rate-limits\' -H \'X-API-Key: YOUR_KEY\'</pre></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/geoip?url=URL</h3><p class="desc">IP geolocation — resolves a domain to its IP address and returns geographic location data including country, region, city, coordinates, ISP, and organization.</p><pre>curl -s \'http://147.93.131.124/api/geoip?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/geoip?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -5242,6 +5251,211 @@ const server = Bun.serve({
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to retry webhook'
         return withJson({ error: message }, { status: 400 })
+      }
+    }
+
+    // --- OpenAPI 3.0 Specification ---
+    if (path === '/api/openapi') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const spec = {
+        openapi: '3.0.0',
+        info: {
+          title: 'Pulse API',
+          version: '1.0.0',
+          description: 'Site intelligence API providing 75+ endpoints for website health, security, performance, and SEO analysis.',
+        },
+        servers: [{ url: 'http://147.93.131.124', description: 'Production' }],
+        paths: {} as Record<string, any>,
+      }
+
+      const addPath = (p: string, method: string, summary: string, params: Array<{ name: string; in_: string; required: boolean; schema: { type: string } }> = [], auth: boolean = false) => {
+        if (!spec.paths[p]) spec.paths[p] = {}
+        const op: any = { summary, responses: { '200': { description: 'Success' } } }
+        if (params.length > 0) {
+          op.parameters = params.map(x => ({ name: x.name, in: x.in_, required: x.required, schema: { type: x.schema.type } }))
+        }
+        if (auth) {
+          op.parameters = op.parameters || []
+          op.parameters.push({ name: 'X-API-Key', in: 'header', required: true, schema: { type: 'string' } })
+        }
+        spec.paths[p][method] = op
+      }
+
+      const urlParam = { name: 'url', in_: 'query', required: true, schema: { type: 'string' } }
+      const optKey = { name: 'X-API-Key', in_: 'header', required: false, schema: { type: 'string' } }
+
+      // Pages
+      addPath('/', 'get', 'Landing page')
+      addPath('/status', 'get', 'Public status page')
+      addPath('/dashboard', 'get', 'Account dashboard')
+      addPath('/docs', 'get', 'Interactive API documentation')
+
+      // Core API
+      addPath('/api/health', 'get', 'Health check')
+      addPath('/api/check', 'get', 'URL analysis', [urlParam, optKey])
+      addPath('/api/dns', 'get', 'DNS record analysis', [urlParam, optKey])
+      addPath('/api/perf', 'get', 'Performance scoring', [urlParam, optKey])
+      addPath('/api/seo', 'get', 'SEO audit', [urlParam, optKey])
+      addPath('/api/compare', 'get', 'Side-by-side URL comparison', [urlParam, { name: 'url2', in_: 'query', required: true, schema: { type: 'string' } }, optKey])
+      addPath('/api/headers', 'get', 'Security headers audit', [urlParam, optKey])
+      addPath('/api/tech', 'get', 'Technology stack detection', [urlParam, optKey])
+      addPath('/api/score', 'get', 'Aggregate site quality score', [urlParam, optKey])
+      addPath('/api/sitemap', 'get', 'XML sitemap parser', [urlParam, optKey])
+      addPath('/api/ssl', 'get', 'SSL certificate monitor', [urlParam, optKey])
+      addPath('/api/robots', 'get', 'Robots.txt parser', [urlParam, optKey])
+      addPath('/api/mixed-content', 'get', 'Mixed content scanner', [urlParam, optKey])
+      addPath('/api/timeline', 'get', 'Redirect chain timeline', [urlParam, optKey])
+      addPath('/api/accessibility', 'get', 'WCAG accessibility audit', [urlParam, optKey])
+      addPath('/api/cookies', 'get', 'Cookie scanner', [urlParam, optKey])
+      addPath('/api/weight', 'get', 'Page weight analyzer', [urlParam, optKey])
+      addPath('/api/carbon', 'get', 'Carbon footprint estimator', [urlParam, optKey])
+      addPath('/api/links', 'get', 'Link checker', [urlParam, optKey])
+      addPath('/api/meta', 'get', 'Meta tag validator', [urlParam, optKey])
+      addPath('/api/http2', 'get', 'HTTP/2 checker', [urlParam, optKey])
+      addPath('/api/structured-data', 'get', 'Structured data validator', [urlParam, optKey])
+      addPath('/api/dnsbl', 'get', 'DNS blacklist lookup', [urlParam, optKey])
+      addPath('/api/og-image', 'get', 'Open Graph image preview', [urlParam, optKey])
+      addPath('/api/html-validate', 'get', 'HTML validator', [urlParam, optKey])
+      addPath('/api/favicon', 'get', 'Favicon checker', [urlParam, optKey])
+      addPath('/api/lighthouse', 'get', 'Lighthouse audit', [urlParam, optKey])
+      addPath('/api/csp', 'get', 'CSP analyzer', [urlParam, optKey])
+      addPath('/api/response-headers', 'get', 'Response headers inspector', [urlParam, optKey])
+      addPath('/api/sri', 'get', 'SRI checker', [urlParam, optKey])
+      addPath('/api/cookie-consent', 'get', 'Cookie consent detector', [urlParam, optKey])
+      addPath('/api/tls-ciphers', 'get', 'TLS cipher suite analyzer', [urlParam, optKey])
+      addPath('/api/hsts-preload', 'get', 'HSTS preload checker', [urlParam, optKey])
+      addPath('/api/websocket', 'get', 'WebSocket support detector', [urlParam, optKey])
+      addPath('/api/dns-propagation', 'get', 'DNS propagation checker', [urlParam, optKey])
+      addPath('/api/permissions-policy', 'get', 'Permissions-Policy analyzer', [urlParam, optKey])
+      addPath('/api/cors-test', 'get', 'CORS tester', [urlParam, optKey])
+      addPath('/api/waf', 'get', 'WAF detector', [urlParam, optKey])
+      addPath('/api/cache-analysis', 'get', 'Cache header analyzer', [urlParam, optKey])
+      addPath('/api/security-txt', 'get', 'Security.txt checker', [urlParam, optKey])
+      addPath('/api/whois', 'get', 'WHOIS lookup', [urlParam, optKey])
+      addPath('/api/content-encoding', 'get', 'Content-Encoding analyzer', [urlParam, optKey])
+      addPath('/api/referrer-policy', 'get', 'Referrer-Policy checker', [urlParam, optKey])
+      addPath('/api/x-frame-options', 'get', 'X-Frame-Options tester', [urlParam, optKey])
+      addPath('/api/subdomains', 'get', 'Subdomain enumerator', [urlParam, optKey])
+      addPath('/api/http-methods', 'get', 'HTTP method tester', [urlParam, optKey])
+      addPath('/api/server-banner', 'get', 'Server banner analyzer', [urlParam, optKey])
+      addPath('/api/emails', 'get', 'Email address harvester', [urlParam, optKey])
+      addPath('/api/open-ports', 'get', 'Port scanner lite', [urlParam, optKey])
+      addPath('/api/dns-diff', 'get', 'DNS record diff', [urlParam, { name: 'url2', in_: 'query', required: true, schema: { type: 'string' } }, optKey])
+      addPath('/api/email-obfuscation', 'get', 'Email obfuscation detector', [urlParam, optKey])
+      addPath('/api/header-timeline', 'get', 'Header timeline tracker', [urlParam, optKey])
+      addPath('/api/domain-age', 'get', 'Domain age checker', [urlParam, optKey])
+      addPath('/api/jwt-decode', 'get', 'JWT token decoder', [urlParam, optKey])
+      addPath('/api/analytics', 'get', 'API usage analytics', [], true)
+      addPath('/api/webhook-retry', 'post', 'Webhook retry with exponential backoff')
+      addPath('/api/uptime', 'get', 'Global uptime statistics')
+      addPath('/api/test-webhook', 'post', 'Webhook delivery test')
+      addPath('/api/batch', 'post', 'Bulk URL analysis')
+      addPath('/api/badge/{id}', 'get', 'Uptime SVG badge', [{ name: 'id', in_: 'path', required: true, schema: { type: 'integer' } }])
+      addPath('/api/register', 'post', 'Register email for API key')
+      addPath('/api/history', 'get', 'Last 50 checks', [], true)
+      addPath('/api/account', 'get', 'User account info', [], true)
+      addPath('/api/subscribe', 'post', 'Create Stripe checkout session')
+      addPath('/api/webhooks/stripe', 'post', 'Handle Stripe webhooks')
+      addPath('/api/monitors', 'get', 'List active monitors', [], true)
+      addPath('/api/monitors', 'post', 'Create scheduled URL monitor', [], true)
+      addPath('/api/monitors/{id}', 'delete', 'Delete a monitor', [{ name: 'id', in_: 'path', required: true, schema: { type: 'integer' } }], true)
+      addPath('/api/monitors/{id}/checks', 'get', 'Get monitor checks', [{ name: 'id', in_: 'path', required: true, schema: { type: 'integer' } }], true)
+      // New Sprint 25 endpoints
+      addPath('/api/openapi', 'get', 'OpenAPI 3.0 specification')
+      addPath('/api/rate-limits', 'get', 'Rate limit status for authenticated user', [], true)
+      addPath('/api/geoip', 'get', 'IP geolocation lookup', [urlParam, optKey])
+
+      return withJson(spec)
+    }
+
+    // --- Rate Limit Dashboard ---
+    if (path === '/api/rate-limits') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim()
+      if (!apiKey) {
+        return withJson({ error: 'X-API-Key header required' }, { status: 401 })
+      }
+
+      const keyRow = getApiKeyByKey(apiKey)
+      if (!keyRow) {
+        return withJson({ error: 'Invalid API key' }, { status: 401 })
+      }
+
+      try {
+        const tier = keyRow.tier === 'pro' ? 'pro' : 'free'
+        const limits: Record<string, number> = { anon: 5, free: 50, pro: 500 }
+        const today = utcDateKey()
+
+        const rows = db.prepare('SELECT endpoint, checks_today, last_reset FROM endpoint_rate_limits WHERE key = ?').all(apiKey) as Array<{ endpoint: string; checks_today: number; last_reset: string }>
+
+        const endpoints = rows
+          .filter(r => r.last_reset === today)
+          .map(r => ({ endpoint: r.endpoint, checks_today: r.checks_today, limit: limits[tier] || 50 }))
+
+        return withJson({
+          api_key: apiKey.slice(0, 8) + '...',
+          tier,
+          limits,
+          endpoints,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to fetch rate limits'
+        return withJson({ error: message }, { status: 500 })
+      }
+    }
+
+    // --- IP Geolocation ---
+    if (path === '/api/geoip') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'geoip')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const hostname = new URL(normalized).hostname
+        const addresses = await dnsResolve(hostname)
+        const ip = addresses[0] || hostname
+
+        const geoResp = await fetch('http://ip-api.com/json/' + ip + '?fields=status,message,country,regionName,city,lat,lon,isp,org')
+        const geo = (await geoResp.json()) as any
+
+        if (geo.status === 'fail') {
+          return withJson({ error: geo.message || 'Geolocation lookup failed', ip }, { status: 502 })
+        }
+
+        return withJson({
+          url: normalized,
+          ip,
+          country: geo.country || null,
+          region: geo.regionName || null,
+          city: geo.city || null,
+          lat: geo.lat || null,
+          lon: geo.lon || null,
+          isp: geo.isp || null,
+          org: geo.org || null,
+          score: 100,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to resolve IP geolocation'
+        return withJson({ error: message }, { status: 502 })
       }
     }
 
