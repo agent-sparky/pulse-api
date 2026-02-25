@@ -1,6 +1,7 @@
 import tls from 'node:tls'
 import { randomBytes } from 'node:crypto'
 import { resolve as dnsResolve } from 'node:dns/promises'
+import { appendFileSync } from 'node:fs'
 import { Database } from 'bun:sqlite'
 import Stripe from 'stripe'
 import nodemailer from 'nodemailer'
@@ -901,6 +902,10 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/compare?urls=https://example.com,https://google.com'</pre>
       <p><strong>Uptime Stats:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/uptime'</pre>
+      <p><strong>Security Headers Audit:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/headers?url=https://example.com'</pre>
+      <p><strong>Technology Stack Detection:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/tech?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1743,6 +1748,8 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/seo?url=URL</h3><p class="desc">SEO audit — title, description, h1 count, images without alt, canonical, robots, score.</p><pre>curl -s \'http://147.93.131.124/api/seo?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/seo?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/compare?urls=URL1,URL2</h3><p class="desc">Side-by-side URL comparison — checks up to 5 URLs, returns fastest/slowest.</p><pre>curl -s \'http://147.93.131.124/api/compare?urls=https://example.com,https://google.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/compare?urls=https://example.com,https://google.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/uptime</h3><p class="desc">Global uptime statistics — server uptime, total checks, monitors, users, checks in last 24h.</p><pre>curl -s http://147.93.131.124/api/uptime</pre><button class="try-btn" onclick="tryIt(this,\'/api/uptime\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/headers?url=URL</h3><p class="desc">Security headers audit — checks 10 security headers (HSTS, CSP, X-Frame-Options, etc.) and returns a score.</p><pre>curl -s \'http://147.93.131.124/api/headers?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/headers?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/tech?url=URL</h3><p class="desc">Technology stack detection — identifies server software, frameworks, and technologies from headers and HTML.</p><pre>curl -s \'http://147.93.131.124/api/tech?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/tech?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -1762,6 +1769,136 @@ const server = Bun.serve({
         status: 200,
         headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=300' },
       })
+    }
+
+    if (path === '/api/headers') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'headers')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const response = await fetch(normalized)
+        const respHeaders = response.headers
+
+        const securityHeaders = [
+          'strict-transport-security',
+          'x-content-type-options',
+          'x-frame-options',
+          'content-security-policy',
+          'x-xss-protection',
+          'referrer-policy',
+          'permissions-policy',
+          'cross-origin-opener-policy',
+          'cross-origin-resource-policy',
+          'cross-origin-embedder-policy',
+        ]
+
+        const found: Record<string, string> = {}
+        const missing: string[] = []
+
+        for (const h of securityHeaders) {
+          const val = respHeaders.get(h)
+          if (val) {
+            found[h] = val
+          } else {
+            missing.push(h)
+          }
+        }
+
+        const score = Object.keys(found).length * 10
+
+        return withJson({ url: normalized, headers: found, missing, score })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Fetch failed'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/tech') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'tech')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const response = await fetch(normalized)
+        const respHeaders = response.headers
+        const html = await response.text()
+
+        const serverHeader = respHeaders.get('server') || null
+        const poweredBy = respHeaders.get('x-powered-by') || null
+        const via = respHeaders.get('via') || null
+        const generator = respHeaders.get('x-generator') || null
+
+        const technologies: string[] = []
+        const cookies: string[] = []
+
+        const setCookies = respHeaders.getSetCookie ? respHeaders.getSetCookie() : []
+        for (const c of setCookies) {
+          const name = c.split('=')[0]?.trim()
+          if (name) cookies.push(name)
+        }
+
+        if (serverHeader) {
+          const sl = serverHeader.toLowerCase()
+          if (sl.includes('cloudflare')) technologies.push('Cloudflare')
+          if (sl.includes('nginx')) technologies.push('Nginx')
+          if (sl.includes('apache')) technologies.push('Apache')
+          if (sl.includes('caddy')) technologies.push('Caddy')
+          if (sl.includes('iis')) technologies.push('IIS')
+          if (sl.includes('litespeed')) technologies.push('LiteSpeed')
+        }
+
+        if (poweredBy) {
+          const pl = poweredBy.toLowerCase()
+          if (pl.includes('express')) technologies.push('Express')
+          if (pl.includes('php')) technologies.push('PHP')
+          if (pl.includes('asp.net')) technologies.push('ASP.NET')
+          if (pl.includes('next.js')) technologies.push('Next.js')
+        }
+
+        const genMatch = html.match(/<meta\s+name=["']generator["']\s+content=["'](.*?)["']/i)
+          || html.match(/<meta\s+content=["'](.*?)["']\s+name=["']generator["']/i)
+        if (genMatch) technologies.push(genMatch[1])
+        if (generator) technologies.push(generator)
+
+        if (cookies.some(c => c.startsWith('__cf'))) technologies.push('Cloudflare')
+        if (cookies.some(c => c.startsWith('wp-'))) technologies.push('WordPress')
+        if (cookies.some(c => c === 'PHPSESSID')) technologies.push('PHP')
+        if (cookies.some(c => c === 'JSESSIONID')) technologies.push('Java')
+
+        const unique = [...new Set(technologies)]
+
+        return withJson({ url: normalized, server: serverHeader, powered_by: poweredBy, via, technologies: unique, cookies })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Fetch failed'
+        return withJson({ error: message }, { status: 502 })
+      }
     }
 
     return withCors('Not Found', { status: 404 })
@@ -1860,6 +1997,19 @@ setInterval(() => {
   }
   console.log('[report] Sent daily reports to ' + count + ' users')
 }, 24 * 60 * 60 * 1000)
+
+setInterval(async () => {
+  try {
+    const result = await checkUrl('https://example.com')
+    const line = '[' + new Date().toISOString() + '] status=' + result.statusCode + ' time=' + result.responseTimeMs + 'ms url=' + result.url + '\n'
+    appendFileSync('/root/opus-orchestrator/logs/health-cron.log', line)
+    console.log('[cron] Health check written to log: status=' + result.statusCode)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'unknown'
+    appendFileSync('/root/opus-orchestrator/logs/health-cron.log', '[' + new Date().toISOString() + '] ERROR: ' + msg + '\n')
+    console.log('[cron] Health check failed: ' + msg)
+  }
+}, 12 * 60 * 60 * 1000)
 
 console.log(`Pulse — Site Intelligence API running on http://localhost:${PORT}`)
 console.log(`Port open in server: ${server.port}`)
