@@ -1,5 +1,6 @@
 import tls from 'node:tls'
 import { randomBytes } from 'node:crypto'
+import { resolve as dnsResolve } from 'node:dns/promises'
 import { Database } from 'bun:sqlite'
 import Stripe from 'stripe'
 
@@ -104,6 +105,14 @@ db.exec(`
     alert_url TEXT,
     last_status_code INTEGER
   );
+
+  CREATE TABLE IF NOT EXISTS endpoint_rate_limits (
+    key TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    checks_today INTEGER DEFAULT 0,
+    last_reset TEXT,
+    PRIMARY KEY (key, endpoint)
+  );
 `)
 
 try { db.exec('ALTER TABLE monitors ADD COLUMN alert_url TEXT') } catch {}
@@ -150,6 +159,10 @@ const getDueMonitorsStmt = db.prepare<
 const updateMonitorStatusCodeStmt = db.prepare('UPDATE monitors SET last_status_code = ? WHERE id = ?')
 const getMonitorByIdAndKeyStmt = db.prepare<MonitorRow, [number, string]>('SELECT * FROM monitors WHERE id = ? AND api_key = ?')
 const getChecksByKeyAndUrlStmt = db.prepare('SELECT id, api_key, ip, url, status_code, response_time_ms, created_at FROM checks WHERE api_key = ? AND url = ? ORDER BY id DESC LIMIT 100')
+
+const findEndpointRateLimitStmt = db.prepare<{ key: string; endpoint: string; checks_today: number; last_reset: string }, [string, string]>('SELECT * FROM endpoint_rate_limits WHERE key = ? AND endpoint = ?')
+const upsertEndpointRateLimitStmt = db.prepare('INSERT INTO endpoint_rate_limits (key, endpoint, checks_today, last_reset) VALUES (?, ?, 1, ?) ON CONFLICT(key, endpoint) DO UPDATE SET checks_today = checks_today + 1')
+const resetEndpointRateLimitStmt = db.prepare('UPDATE endpoint_rate_limits SET checks_today = 1, last_reset = ? WHERE key = ? AND endpoint = ?')
 
 function toISOStringNow(): string {
   return new Date().toISOString()
@@ -519,6 +532,45 @@ function recordCheck(apiKey: string | null, ip: string, payload: CheckPayload): 
   )
 }
 
+function getEndpointRateLimit(
+  ip: string,
+  apiKey: string | null,
+  endpoint: string,
+): { allowed: boolean; limit: number; resetAt: string } {
+  const today = utcDateKey()
+  const resetAt = utcMidnightReset()
+  const key = apiKey || ('ip:' + ip)
+
+  let tier = 'anon'
+  if (apiKey) {
+    const row = getApiKeyByKey(apiKey)
+    if (row) tier = row.tier === 'pro' ? 'pro' : 'free'
+  }
+
+  const limits: Record<string, number> = { anon: 5, free: 50, pro: 500 }
+  const limit = limits[tier] || 5
+
+  const row = findEndpointRateLimitStmt.get(key, endpoint) as { key: string; endpoint: string; checks_today: number; last_reset: string } | null
+  if (row && row.last_reset === today) {
+    if (row.checks_today >= limit) {
+      return { allowed: false, limit, resetAt }
+    }
+    upsertEndpointRateLimitStmt.run(key, endpoint, today)
+    return { allowed: true, limit, resetAt }
+  }
+
+  if (row) {
+    resetEndpointRateLimitStmt.run(today, key, endpoint)
+  } else {
+    upsertEndpointRateLimitStmt.run(key, endpoint, today)
+  }
+  return { allowed: true, limit, resetAt }
+}
+
+function dashboardHtml(): string {
+  return '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="UTF-8"/>\n<meta name="viewport" content="width=device-width,initial-scale=1.0"/>\n<title>Pulse Dashboard</title>\n<style>\n:root{--bg:#090b10;--panel:#11141d;--text:#f7f9ff;--muted:#9aa4bf;--accent:#39c5ff;--border:#2a3040;--good:#3ddc97;--bad:#ff6378}\n*{box-sizing:border-box}\nbody{margin:0;font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--text);padding:2rem}\n.wrap{max-width:960px;margin:0 auto}\nh1{color:var(--accent);margin:0 0 .5rem}\n.info{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:1rem;margin-bottom:1rem}\n.info span{color:var(--muted);margin-right:1.5rem}\n.info strong{color:var(--text)}\ntable{width:100%;border-collapse:collapse;margin-top:.5rem}\nth,td{text-align:left;padding:.5rem .7rem;border-bottom:1px solid var(--border)}\nth{color:var(--muted);font-size:.85rem;text-transform:uppercase}\ntd{font-size:.9rem}\n.good{color:var(--good)}.bad{color:var(--bad)}\nform.create{display:grid;grid-template-columns:2fr 1fr 2fr auto;gap:.5rem;margin:1rem 0}\ninput,button{border-radius:8px;padding:.6rem .8rem;font-size:.9rem;border:1px solid var(--border);background:var(--panel);color:var(--text)}\nbutton{background:linear-gradient(120deg,var(--accent),#7ce0ff);color:#071120;border:0;cursor:pointer;font-weight:600}\nbutton:hover{filter:brightness(1.05)}\n.section{margin-top:1.5rem}\n.section h2{margin:0 0 .5rem;font-size:1.1rem}\n.msg{color:var(--muted);padding:1rem;text-align:center}\na{color:var(--accent);text-decoration:none}\na:hover{text-decoration:underline}\n.del{background:var(--bad);color:#fff;padding:.3rem .6rem;border-radius:6px;font-size:.8rem;cursor:pointer;border:0}\n.nav{display:flex;gap:1rem;margin-bottom:1rem}\n#key-input{display:flex;gap:.5rem;margin-bottom:1.5rem}\n#key-input input{flex:1}\n</style>\n</head>\n<body>\n<div class="wrap">\n<div class="nav"><a href="/">&larr; Home</a><h1>Pulse Dashboard</h1></div>\n<div id="key-input"><input id="api-key" type="text" placeholder="Enter your API key"/><button onclick="loadDashboard()">Load</button></div>\n<div id="account" class="info" style="display:none"></div>\n<div class="section"><h2>Monitors</h2>\n<form class="create" id="monitor-form" style="display:none">\n<input id="mon-url" placeholder="https://example.com" required/>\n<input id="mon-interval" type="number" value="5" min="1" max="60" placeholder="min"/>\n<input id="mon-alert" placeholder="alert webhook URL (optional)"/>\n<button type="submit">Create Monitor</button>\n</form>\n<div id="monitors"><p class="msg">Enter your API key above.</p></div>\n</div>\n<div class="section"><h2>Recent Checks</h2>\n<div id="checks"><p class="msg">Enter your API key above.</p></div>\n</div>\n</div>\n<script>\nvar KEY=""\nfunction getKey(){KEY=document.getElementById("api-key").value.trim();return KEY}\nfunction loadDashboard(){if(!getKey())return;loadAccount();loadMonitors();loadChecks()}\nfunction loadAccount(){\nfetch("/api/account",{headers:{"X-API-Key":KEY}}).then(function(r){return r.json()}).then(function(d){\nvar el=document.getElementById("account");el.style.display="block";\nel.innerHTML="<span>Email: <strong>"+d.email+"</strong></span><span>Tier: <strong>"+d.tier+"</strong></span><span>Checks today: <strong>"+d.checksToday+"/"+d.limitPerDay+"</strong></span>"\n}).catch(function(){})}\nfunction loadMonitors(){\nfetch("/api/monitors",{headers:{"X-API-Key":KEY}}).then(function(r){return r.json()}).then(function(list){\nvar el=document.getElementById("monitors");\ndocument.getElementById("monitor-form").style.display="grid";\nif(!list.length){el.innerHTML="<p class=\\"msg\\">No monitors yet.</p>";return}\nvar h="<table><tr><th>ID</th><th>URL</th><th>Interval</th><th>Status</th><th>Alert URL</th><th></th></tr>";\nfor(var i=0;i<list.length;i++){var m=list[i];var cls=m.last_status_code===200?"good":"bad";\nh+="<tr><td>"+m.id+"</td><td>"+m.url+"</td><td>"+m.interval_minutes+"m</td><td class=\\""+cls+"\\">"+((m.last_status_code)||"pending")+"</td><td>"+(m.alert_url||"none")+"</td><td><button class=\\"del\\" onclick=\\"delMon("+m.id+")\\">Delete</button></td></tr>"}\nh+="</table>";el.innerHTML=h\n}).catch(function(){})}\nfunction loadChecks(){\nfetch("/api/history",{headers:{"X-API-Key":KEY}}).then(function(r){return r.json()}).then(function(list){\nvar el=document.getElementById("checks");\nif(!list.length){el.innerHTML="<p class=\\"msg\\">No checks yet.</p>";return}\nvar h="<table><tr><th>URL</th><th>Status</th><th>Time</th><th>Date</th></tr>";\nfor(var i=0;i<list.length;i++){var c=list[i];var cls=c.status_code===200?"good":"bad";\nh+="<tr><td>"+c.url+"</td><td class=\\""+cls+"\\">"+c.status_code+"</td><td>"+c.response_time_ms+"ms</td><td>"+c.created_at+"</td></tr>"}\nh+="</table>";el.innerHTML=h\n}).catch(function(){})}\nfunction delMon(id){\nfetch("/api/monitors/"+id,{method:"DELETE",headers:{"X-API-Key":KEY}}).then(function(){loadMonitors()}).catch(function(){})}\ndocument.getElementById("monitor-form").addEventListener("submit",function(e){\ne.preventDefault();\nvar u=document.getElementById("mon-url").value.trim();\nvar iv=parseInt(document.getElementById("mon-interval").value)||5;\nvar al=document.getElementById("mon-alert").value.trim()||null;\nfetch("/api/monitors",{method:"POST",headers:{"X-API-Key":KEY,"Content-Type":"application/json"},body:JSON.stringify({url:u,interval_minutes:iv,alert_url:al})}).then(function(r){return r.json()}).then(function(){loadMonitors();document.getElementById("mon-url").value=""}).catch(function(){})})\nvar stored=localStorage.getItem("pulse_api_key");\nif(stored){document.getElementById("api-key").value=stored;loadDashboard()}\nfunction getKey(){KEY=document.getElementById("api-key").value.trim();localStorage.setItem("pulse_api_key",KEY);return KEY}\n</script>\n</body>\n</html>'
+}
+
 function landingHtml(): string {
   return `<!doctype html>
 <html lang="en">
@@ -754,7 +806,8 @@ function landingHtml(): string {
   <main class="wrap">
     <header>
       <h1>Pulse — Site Intelligence API</h1>
-      <p class="subtitle">Instant website health checks — response time, SSL, headers, redirects</p>
+      <p class="subtitle">Instant website health checks — response time, SSL, headers, redirects, DNS, performance scoring</p>
+      <div style="margin-top:0.8rem"><a href="/dashboard" style="color:var(--accent);font-weight:600;text-decoration:none;border:1px solid var(--accent);border-radius:8px;padding:0.5rem 1rem;display:inline-block">Dashboard &rarr;</a></div>
     </header>
 
     <form id="check-form">
@@ -794,6 +847,10 @@ function landingHtml(): string {
       <p><strong>Monitor Checks:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/monitors/1/checks' \
   -H 'X-API-Key: YOUR_KEY'</pre>
+      <p><strong>DNS Analysis:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/dns?domain=example.com'</pre>
+      <p><strong>Performance Score:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/perf?url=https://example.com'</pre>
     </section>
 
     <section class="section">
@@ -943,6 +1000,17 @@ const server = Bun.serve({
 
     if (request.method === 'OPTIONS') {
       return withCors(null, { status: 204 })
+    }
+
+    if (path === '/dashboard') {
+      if (request.method !== 'GET') {
+        return withCors('Method Not Allowed', { status: 405 })
+      }
+
+      return withCors(dashboardHtml(), {
+        status: 200,
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      })
     }
 
     if (path === '/') {
@@ -1261,6 +1329,82 @@ const server = Bun.serve({
       }
 
       return withCors('Not Found', { status: 404 })
+    }
+
+    if (path === '/api/dns') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const domain = url.searchParams.get('domain')
+      if (!domain) {
+        return withJson({ error: 'domain parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'dns')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      const result: Record<string, unknown> = { domain }
+      try { result.a = await dnsResolve(domain, 'A') } catch { result.a = [] }
+      try { result.mx = await dnsResolve(domain, 'MX') } catch { result.mx = [] }
+      try { result.txt = await dnsResolve(domain, 'TXT') } catch { result.txt = [] }
+      try { result.ns = await dnsResolve(domain, 'NS') } catch { result.ns = [] }
+      try { result.cname = await dnsResolve(domain, 'CNAME') } catch { result.cname = [] }
+
+      return withJson(result)
+    }
+
+    if (path === '/api/perf') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'perf')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const t0 = performance.now()
+        const response = await fetch(normalized)
+        const ttfb = performance.now() - t0
+        const buf = await response.arrayBuffer()
+        const totalMs = performance.now() - t0
+        const sizeBytes = buf.byteLength
+        const contentType = response.headers.get('content-type') || 'unknown'
+        const compressed = !!response.headers.get('content-encoding')
+
+        let score = 100
+        if (ttfb > 200) score -= Math.floor((ttfb - 200) / 100)
+        if (sizeBytes > 500 * 1024) score -= Math.floor((sizeBytes - 500 * 1024) / (50 * 1024))
+        if (!compressed) score -= 10
+        score = Math.max(0, Math.min(100, score))
+
+        return withJson({
+          url: normalized,
+          ttfb_ms: Math.round(ttfb),
+          total_ms: Math.round(totalMs),
+          size_bytes: sizeBytes,
+          content_type: contentType,
+          compressed,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Fetch failed'
+        return withJson({ error: message }, { status: 502 })
+      }
     }
 
     if (path === '/api/history') {
