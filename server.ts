@@ -918,6 +918,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/mixed-content?url=https://example.com'</pre>
       <p><strong>Response Header Timeline:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/timeline?url=https://example.com'</pre>
+      <p><strong>Accessibility Audit:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/accessibility?url=https://example.com'</pre>
+      <p><strong>Cookie Scanner:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/cookies?url=https://example.com'</pre>
+      <p><strong>Page Weight Analyzer:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/weight?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1768,6 +1774,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/robots?url=URL</h3><p class="desc">Robots.txt parser — fetches and parses robots.txt, extracts User-agent, Allow, Disallow, Sitemap directives and Crawl-delay.</p><pre>curl -s \'http://147.93.131.124/api/robots?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/robots?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/mixed-content?url=URL</h3><p class="desc">Mixed content scanner — detects HTTP resources loaded on HTTPS pages, reports insecure src/href/action attributes.</p><pre>curl -s \'http://147.93.131.124/api/mixed-content?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/mixed-content?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/timeline?url=URL</h3><p class="desc">Response header timeline — traces redirect chain with per-hop timing, total hops, and total time.</p><pre>curl -s \'http://147.93.131.124/api/timeline?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/timeline?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/accessibility?url=URL</h3><p class="desc">Accessibility audit — checks for missing alt attributes, missing lang, empty links, missing form labels, skip navigation, ARIA landmarks, and h1. Returns issues array and score.</p><pre>curl -s \'http://147.93.131.124/api/accessibility?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/accessibility?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/cookies?url=URL</h3><p class="desc">Cookie scanner — extracts and classifies all Set-Cookie headers. Identifies tracking, session, and persistent cookies with secure/httpOnly/sameSite flags.</p><pre>curl -s \'http://147.93.131.124/api/cookies?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/cookies?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/weight?url=URL</h3><p class="desc">Page weight analyzer — calculates HTML size, counts scripts, stylesheets, images, fonts, and iframes. Returns resource breakdown and estimated weight.</p><pre>curl -s \'http://147.93.131.124/api/weight?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/weight?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -2283,6 +2292,234 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to trace redirect timeline'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/accessibility') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'accessibility')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { signal: AbortSignal.timeout(15000) })
+        const html = await resp.text()
+
+        const issues: Array<{ type: string; element: string; count: number }> = []
+        let score = 100
+
+        const imgsAll = html.match(/<img\b[^>]*>/gi) || []
+        const imgsMissingAlt = imgsAll.filter(tag => !tag.match(/alt\s*=/i))
+        if (imgsMissingAlt.length > 0) {
+          issues.push({ type: 'missing_alt', element: 'img', count: imgsMissingAlt.length })
+          score -= Math.min(imgsMissingAlt.length * 5, 20)
+        }
+
+        const hasLang = /<html[^>]+lang\s*=/i.test(html)
+        if (!hasLang) {
+          issues.push({ type: 'missing_lang', element: 'html', count: 1 })
+          score -= 15
+        }
+
+        const emptyLinks = (html.match(/<a\b[^>]*>\s*<\/a>/gi) || []).length
+        if (emptyLinks > 0) {
+          issues.push({ type: 'empty_links', element: 'a', count: emptyLinks })
+          score -= Math.min(emptyLinks * 3, 15)
+        }
+
+        const formInputs = html.match(/<input\b[^>]*>/gi) || []
+        const labels = html.match(/<label\b/gi) || []
+        if (formInputs.length > 0 && labels.length < formInputs.length) {
+          const missing = formInputs.length - labels.length
+          issues.push({ type: 'missing_form_labels', element: 'input', count: missing })
+          score -= Math.min(missing * 5, 15)
+        }
+
+        const hasSkipNav = /skip[- ]?nav|skip[- ]?to[- ]?content|skip[- ]?link/i.test(html)
+        if (!hasSkipNav) {
+          issues.push({ type: 'missing_skip_navigation', element: 'body', count: 1 })
+          score -= 10
+        }
+
+        const hasMainLandmark = /<main\b/i.test(html) || /role\s*=\s*["']main["']/i.test(html)
+        const hasNavLandmark = /<nav\b/i.test(html) || /role\s*=\s*["']navigation["']/i.test(html)
+        if (!hasMainLandmark) {
+          issues.push({ type: 'missing_landmark_main', element: 'body', count: 1 })
+          score -= 10
+        }
+        if (!hasNavLandmark) {
+          issues.push({ type: 'missing_landmark_nav', element: 'body', count: 1 })
+          score -= 5
+        }
+
+        const hasH1 = /<h1\b/i.test(html)
+        if (!hasH1) {
+          issues.push({ type: 'missing_h1', element: 'body', count: 1 })
+          score -= 10
+        }
+
+        score = Math.max(score, 0)
+        const totalIssues = issues.reduce((sum, i) => sum + i.count, 0)
+
+        return withJson({
+          url: normalized,
+          issues,
+          total_issues: totalIssues,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to audit accessibility'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/cookies') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'cookies')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { signal: AbortSignal.timeout(15000) })
+        const setCookies = resp.headers.getSetCookie() || []
+
+        const trackingPatterns = /^(_ga|_gid|_fbp|_fbc|_gcl|__utm|_hjid|_hjSession|_hj|mp_|_mkto|hubspot|__hssc|__hstc|__hsfp|_clck|_clsk|_uetv|_uetvid|IDE|DSID|NID|APISID|SSID|SAPISID)/i
+        const cookies: Array<{
+          name: string
+          domain: string | null
+          path: string
+          secure: boolean
+          httpOnly: boolean
+          sameSite: string | null
+          type: string
+          expires: string | null
+        }> = []
+
+        let trackingCount = 0
+        let sessionCount = 0
+
+        for (const raw of setCookies) {
+          const parts = raw.split(';').map(p => p.trim())
+          const [nameVal] = parts
+          const eqIdx = nameVal.indexOf('=')
+          const name = eqIdx > -1 ? nameVal.slice(0, eqIdx).trim() : nameVal.trim()
+
+          let domain: string | null = null
+          let path = '/'
+          let secure = false
+          let httpOnly = false
+          let sameSite: string | null = null
+          let expires: string | null = null
+
+          for (const part of parts.slice(1)) {
+            const lower = part.toLowerCase()
+            if (lower.startsWith('domain=')) domain = part.slice(7).trim()
+            else if (lower.startsWith('path=')) path = part.slice(5).trim()
+            else if (lower === 'secure') secure = true
+            else if (lower === 'httponly') httpOnly = true
+            else if (lower.startsWith('samesite=')) sameSite = part.slice(9).trim()
+            else if (lower.startsWith('expires=')) expires = part.slice(8).trim()
+            else if (lower.startsWith('max-age=')) {
+              const maxAge = parseInt(part.slice(8).trim(), 10)
+              if (!isNaN(maxAge)) expires = new Date(Date.now() + maxAge * 1000).toISOString()
+            }
+          }
+
+          const isTracking = trackingPatterns.test(name)
+          const isSession = !expires
+          const type = isTracking ? 'tracking' : isSession ? 'session' : 'persistent'
+          if (isTracking) trackingCount++
+          if (isSession) sessionCount++
+
+          cookies.push({ name, domain, path, secure, httpOnly, sameSite, type, expires })
+        }
+
+        return withJson({
+          url: normalized,
+          cookies,
+          total: cookies.length,
+          tracking_count: trackingCount,
+          session_count: sessionCount,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to scan cookies'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/weight') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'weight')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { signal: AbortSignal.timeout(15000) })
+        const html = await resp.text()
+        const htmlSizeBytes = new TextEncoder().encode(html).length
+
+        const scripts = (html.match(/<script\b[^>]*src\s*=/gi) || []).length
+        const inlineScripts = (html.match(/<script\b[^>]*>[\s\S]*?<\/script>/gi) || []).filter(s => !s.match(/src\s*=/i)).length
+        const stylesheets = (html.match(/<link\b[^>]*rel\s*=\s*["']stylesheet["'][^>]*>/gi) || []).length
+        const inlineStyles = (html.match(/<style\b[^>]*>[\s\S]*?<\/style>/gi) || []).length
+        const images = (html.match(/<img\b[^>]*>/gi) || []).length
+        const fonts = (html.match(/<link\b[^>]*rel\s*=\s*["']preload["'][^>]*as\s*=\s*["']font["'][^>]*>/gi) || []).length
+            + (html.match(/url\s*\([^)]*\.(woff2?|ttf|otf|eot)/gi) || []).length
+        const iframes = (html.match(/<iframe\b[^>]*>/gi) || []).length
+
+        const totalResources = scripts + inlineScripts + stylesheets + inlineStyles + images + fonts + iframes
+        const estimatedWeightKb = Math.round(htmlSizeBytes / 1024)
+
+        return withJson({
+          url: normalized,
+          html_size_bytes: htmlSizeBytes,
+          total_resources: totalResources,
+          scripts: scripts + inlineScripts,
+          stylesheets: stylesheets + inlineStyles,
+          images,
+          fonts,
+          iframes,
+          estimated_weight_kb: estimatedWeightKb,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to analyze page weight'
         return withJson({ error: message }, { status: 502 })
       }
     }
