@@ -1,14 +1,19 @@
 import tls from 'node:tls'
 import { randomBytes } from 'node:crypto'
 import { Database } from 'bun:sqlite'
+import Stripe from 'stripe'
 
 const PORT = 3000
 const MAX_REDIRECTS = 5
 const DB_PATH = '/root/opus-orchestrator/workspace/opus-api/pulse.db'
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || ''
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || ''
+const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || ''
+const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null
 
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, X-API-Key',
 }
 
@@ -47,6 +52,16 @@ type RateLimitRow = {
   last_reset: string
 }
 
+type MonitorRow = {
+  id: number
+  api_key: string
+  url: string
+  interval_minutes: number
+  last_check: string | null
+  status: string
+  created_at: string
+}
+
 const db = new Database(DB_PATH)
 
 db.exec(`
@@ -75,6 +90,16 @@ db.exec(`
     checks_today INTEGER DEFAULT 0,
     last_reset TEXT
   );
+
+  CREATE TABLE IF NOT EXISTS monitors (
+    id INTEGER PRIMARY KEY,
+    api_key TEXT NOT NULL,
+    url TEXT NOT NULL,
+    interval_minutes INTEGER DEFAULT 5,
+    last_check TEXT,
+    status TEXT DEFAULT 'active',
+    created_at TEXT
+  );
 `)
 
 const findApiKeyByEmailStmt = db.prepare<
@@ -100,6 +125,21 @@ const insertCheckStmt = db.prepare(
 const getHistoryStmt = db.prepare(
   'SELECT id, api_key, ip, url, status_code, response_time_ms, created_at FROM checks WHERE api_key = ? ORDER BY id DESC LIMIT 50'
 )
+const updateApiKeyTierStmt = db.prepare('UPDATE api_keys SET tier = ? WHERE email = ?')
+const insertMonitorStmt = db.prepare(
+  `INSERT INTO monitors (api_key, url, interval_minutes, last_check, status, created_at)
+   VALUES (?, ?, ?, NULL, 'active', ?)`
+)
+const getMonitorsStmt = db.prepare<MonitorRow, [string]>(
+  "SELECT id, api_key, url, interval_minutes, last_check, status, created_at FROM monitors WHERE api_key = ? AND status = 'active'",
+)
+const deleteMonitorStmt = db.prepare(
+  'UPDATE monitors SET status = \'deleted\' WHERE id = ? AND api_key = ?',
+)
+const getDueMonitorsStmt = db.prepare<
+  Pick<MonitorRow, 'id' | 'api_key' | 'url' | 'interval_minutes' | 'last_check'>,
+  []
+>("SELECT id, api_key, url, interval_minutes, last_check FROM monitors WHERE status = 'active'")
 
 function toISOStringNow(): string {
   return new Date().toISOString()
@@ -385,7 +425,7 @@ function getRateLimit(ip: string, apiKey: string | null): {
       }
 
       const tier = row.tier === 'pro' ? 'pro' : 'free'
-      const limit = tier === 'pro' ? Number.MAX_SAFE_INTEGER : 100
+      const limit = tier === 'pro' ? 1000 : 100
 
       if (tier === 'free' && row.checks_today >= limit) {
         return {
@@ -726,6 +766,21 @@ function landingHtml(): string {
       <p><strong>History:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/history' \
   -H 'X-API-Key: YOUR_API_KEY'</pre>
+      <p><strong>Account:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/account' \
+  -H 'X-API-Key: YOUR_KEY'</pre>
+      <p><strong>Subscribe:</strong></p>
+      <pre>curl -s -X POST 'http://147.93.131.124/api/subscribe' \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@example.com"}'</pre>
+      <p><strong>Monitors:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/monitors' \
+  -H 'X-API-Key: YOUR_KEY'</pre>
+      <p><strong>Create Monitor:</strong></p>
+      <pre>curl -s -X POST 'http://147.93.131.124/api/monitors' \
+  -H 'X-API-Key: YOUR_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com","interval_minutes":5}'</pre>
     </section>
 
     <section class="section">
@@ -737,16 +792,27 @@ function landingHtml(): string {
       <div id="register-result" class="api-key-result"></div>
     </section>
 
-    <section class="grid">
-      <article class="card">
-        <h2>Free</h2>
-        <p class="price">10 checks/day</p>
-      </article>
-      <article class="card">
-        <h2>Pro</h2>
-        <p class="price">$9/month</p>
-        <p>Unlimited checks and higher limits.</p>
-      </article>
+    <section class="section">
+      <h2>Pricing</h2>
+      <div class="grid">
+        <article class="card">
+          <h2>Free</h2>
+          <p>10 checks/day anonymous</p>
+          <p>100 checks/day with API key</p>
+        </article>
+        <article class="card">
+          <h2>Pro</h2>
+          <p class="price">$9/month</p>
+          <p>1000 checks/day</p>
+          <p>scheduled URL monitoring</p>
+          <p>webhook alerts</p>
+        </article>
+      </div>
+      <form id="subscribe-form" style="grid-template-columns: 1fr auto; margin-top: 0.8rem;">
+        <input id="subscribe-email" type="email" placeholder="you@example.com" required />
+        <button type="submit">Subscribe to Pro</button>
+      </form>
+      <div id="subscribe-result" class="api-key-result"></div>
     </section>
 
     <footer>Powered by Opus</footer>
@@ -759,6 +825,9 @@ function landingHtml(): string {
     const registerForm = document.getElementById('register-form')
     const registerEmail = document.getElementById('register-email')
     const registerResult = document.getElementById('register-result')
+    const subscribeForm = document.getElementById('subscribe-form')
+    const subscribeEmail = document.getElementById('subscribe-email')
+    const subscribeResult = document.getElementById('subscribe-result')
 
     checkForm.addEventListener('submit', async function (event) {
       event.preventDefault()
@@ -810,6 +879,41 @@ function landingHtml(): string {
       } catch (error) {
         const message = error && error.message ? error.message : 'Unknown error'
         registerResult.textContent = 'Request failed: ' + message
+      }
+    })
+
+    subscribeForm.addEventListener('submit', async function (event) {
+      event.preventDefault()
+      const email = subscribeEmail.value.trim()
+      if (!email) {
+        subscribeResult.textContent = 'Please provide an email address.'
+        return
+      }
+
+      subscribeResult.textContent = 'Starting checkout flow...'
+
+      try {
+        const response = await fetch('/api/subscribe', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ email: email }),
+        })
+
+        const body = await response.json()
+        if (response.ok && body.checkoutUrl) {
+          subscribeResult.textContent = 'Checkout URL: ' + body.checkoutUrl
+        } else if (body.error) {
+          subscribeResult.textContent = body.error
+        } else if (body.message) {
+          subscribeResult.textContent = body.message
+        } else {
+          subscribeResult.textContent = 'Could not start checkout.'
+        }
+      } catch (error) {
+        const message = error && error.message ? error.message : 'Unknown error'
+        subscribeResult.textContent = 'Request failed: ' + message
       }
     })
   </script>
@@ -873,7 +977,7 @@ const server = Bun.serve({
       }
 
       const result = getOrCreateApiKey(email)
-      const limit = result.tier === 'pro' ? Number.MAX_SAFE_INTEGER : 100
+      const limit = result.tier === 'pro' ? 1000 : 100
 
       return withJson(
         {
@@ -885,6 +989,126 @@ const server = Bun.serve({
           status: 200,
         },
       )
+    }
+
+    if (path === '/api/subscribe') {
+      if (request.method !== 'POST') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const payload = await request.json().catch(() => null)
+      const email =
+        payload && typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : ''
+      if (!email || !isValidEmail(email)) {
+        return withJson({ error: 'Invalid email format' }, { status: 400 })
+      }
+
+      const row = getApiKeyByEmail(email)
+      if (!row) {
+        return withJson({ error: 'Email not registered' }, { status: 404 })
+      }
+
+      if (!stripe) {
+        return withJson(
+          {
+            error: 'Stripe not configured',
+            message: 'Payment processing is not yet available',
+          },
+          { status: 503 },
+        )
+      }
+
+      try {
+        const session = await stripe.checkout.sessions.create({
+          mode: 'subscription',
+          line_items: [
+            {
+              price: STRIPE_PRICE_ID,
+              quantity: 1,
+            },
+          ],
+          customer_email: row.email,
+          success_url: 'http://147.93.131.124/?upgraded=true',
+          cancel_url: 'http://147.93.131.124/?cancelled=true',
+        })
+
+        return withJson({ checkoutUrl: session.url }, { status: 200 })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Stripe error'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/webhooks/stripe') {
+      if (request.method !== 'POST') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      if (!stripe || !STRIPE_WEBHOOK_SECRET) {
+        return withJson({ error: 'Webhook not configured' }, { status: 503 })
+      }
+
+      const sig = request.headers.get('stripe-signature')
+      const body = await request.text()
+      try {
+        const event = stripe.webhooks.constructEvent(body, sig || '', STRIPE_WEBHOOK_SECRET)
+
+        if (event.type === 'checkout.session.completed') {
+          const checkoutSession = event.data.object as {
+            customer_email?: string | null
+          }
+
+          const customerEmail = checkoutSession.customer_email?.trim().toLowerCase()
+          if (customerEmail) {
+            updateApiKeyTierStmt.run('pro', customerEmail)
+          }
+        }
+
+        if (event.type === 'customer.subscription.deleted') {
+          const subscription = event.data.object as {
+            customer_email?: string | null
+          }
+
+          const customerEmail = subscription.customer_email?.trim().toLowerCase()
+          if (customerEmail) {
+            updateApiKeyTierStmt.run('free', customerEmail)
+          }
+        }
+
+        return withJson({ received: true }, { status: 200 })
+      } catch {
+        return withJson({ error: 'Invalid signature' }, { status: 400 })
+      }
+    }
+
+    if (path === '/api/account') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      if (!apiKey) {
+        return withJson({ error: 'Missing X-API-Key header' }, { status: 401 })
+      }
+
+      const row = getApiKeyByKey(apiKey)
+      if (!row) {
+        return withJson({ error: 'Invalid API key' }, { status: 401 })
+      }
+
+      const today = utcDateKey()
+      if (row.last_reset !== today) {
+        updateApiKeyResetStmt.run(today, apiKey)
+        row.checks_today = 0
+        row.last_reset = today
+      }
+
+      return withJson({
+        email: row.email,
+        tier: row.tier,
+        checksToday: row.checks_today,
+        limitPerDay: row.tier === 'pro' ? 1000 : 100,
+      })
     }
 
     if (path === '/api/check') {
@@ -937,6 +1161,72 @@ const server = Bun.serve({
       return withJson(payload)
     }
 
+    if (path.startsWith('/api/monitors')) {
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      if (!apiKey) {
+        return withJson({ error: 'Missing X-API-Key header' }, { status: 401 })
+      }
+
+      const apiKeyRow = getApiKeyByKey(apiKey)
+      if (!apiKeyRow) {
+        return withJson({ error: 'Invalid API key' }, { status: 401 })
+      }
+
+      if (path === '/api/monitors') {
+        if (request.method === 'GET') {
+          const monitors = getMonitorsStmt.all(apiKeyRow.key) as MonitorRow[]
+          return withJson(monitors)
+        }
+
+        if (request.method === 'POST') {
+          if (apiKeyRow.tier !== 'pro') {
+            return withJson({ error: 'Pro tier required' }, { status: 403 })
+          }
+
+          const payload = await request.json().catch(() => null)
+          const monitorUrl = payload && typeof payload.url === 'string' ? payload.url.trim() : ''
+          if (!monitorUrl) {
+            return withJson({ error: 'Missing url' }, { status: 400 })
+          }
+
+          const requestedInterval =
+            payload && typeof payload.interval_minutes === 'number' && Number.isFinite(payload.interval_minutes)
+              ? Math.floor(payload.interval_minutes)
+              : 5
+          const intervalMinutes = Math.max(1, Math.min(60, requestedInterval))
+          const now = toISOStringNow()
+          const inserted = insertMonitorStmt.run(apiKeyRow.key, monitorUrl, intervalMinutes, now) as {
+            lastInsertRowid: number
+          }
+
+          return withJson(
+            {
+              id: inserted.lastInsertRowid,
+              url: monitorUrl,
+              interval_minutes: intervalMinutes,
+              status: 'active',
+            },
+            { status: 201 },
+          )
+        }
+
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const deleteMatch = path.match(/^\/api\/monitors\/(\d+)$/)
+      if (deleteMatch) {
+        if (request.method !== 'DELETE') {
+          return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+        }
+
+        const monitorId = Number(deleteMatch[1])
+        deleteMonitorStmt.run(monitorId, apiKeyRow.key)
+        return withJson({ deleted: true })
+      }
+
+      return withCors('Not Found', { status: 404 })
+    }
+
     if (path === '/api/history') {
       if (request.method !== 'GET') {
         return withJson({ error: 'Method Not Allowed' }, { status: 405 })
@@ -959,6 +1249,31 @@ const server = Bun.serve({
     return withCors('Not Found', { status: 404 })
   },
 })
+
+setInterval(async () => {
+  const monitors = getDueMonitorsStmt.all() as any[]
+  const now = new Date()
+
+  for (const mon of monitors) {
+    const lastCheck = mon.last_check ? new Date(mon.last_check) : new Date(0)
+    const diffMinutes = (now.getTime() - lastCheck.getTime()) / 60000
+
+    if (diffMinutes >= mon.interval_minutes) {
+      try {
+        const result = await checkUrl(mon.url)
+        insertCheckStmt.run(
+          mon.api_key,
+          '127.0.0.1',
+          result.url,
+          result.statusCode,
+          result.responseTimeMs,
+          result.timestamp,
+        )
+        db.prepare('UPDATE monitors SET last_check = ? WHERE id = ?').run(result.timestamp, mon.id)
+      } catch {}
+    }
+  }
+}, 60000)
 
 console.log(`Pulse — Site Intelligence API running on http://localhost:${PORT}`)
 console.log(`Port open in server: ${server.port}`)
