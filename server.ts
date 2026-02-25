@@ -807,7 +807,7 @@ function landingHtml(): string {
     <header>
       <h1>Pulse — Site Intelligence API</h1>
       <p class="subtitle">Instant website health checks — response time, SSL, headers, redirects, DNS, performance scoring</p>
-      <div style="margin-top:0.8rem"><a href="/dashboard" style="color:var(--accent);font-weight:600;text-decoration:none;border:1px solid var(--accent);border-radius:8px;padding:0.5rem 1rem;display:inline-block">Dashboard &rarr;</a></div>
+      <div style="margin-top:0.8rem"><a href="/dashboard" style="color:var(--accent);font-weight:600;text-decoration:none;border:1px solid var(--accent);border-radius:8px;padding:0.5rem 1rem;display:inline-block">Dashboard &rarr;</a> <a href="/status" style="color:var(--accent);font-weight:600;text-decoration:none;border:1px solid var(--accent);border-radius:8px;padding:0.5rem 1rem;display:inline-block;margin-left:0.5rem">Status &rarr;</a></div>
     </header>
 
     <form id="check-form">
@@ -851,6 +851,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/dns?domain=example.com'</pre>
       <p><strong>Performance Score:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/perf?url=https://example.com'</pre>
+      <p><strong>SEO Audit:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/seo?url=https://example.com'</pre>
+      <p><strong>Test Webhook:</strong></p>
+      <pre>curl -s -X POST 'http://147.93.131.124/api/test-webhook' \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://httpbin.org/post"}'</pre>
     </section>
 
     <section class="section">
@@ -1000,6 +1006,36 @@ const server = Bun.serve({
 
     if (request.method === 'OPTIONS') {
       return withCors(null, { status: 204 })
+    }
+
+    if (path === '/status') {
+      if (request.method !== 'GET') {
+        return withCors('Method Not Allowed', { status: 405 })
+      }
+
+      const uptime = process.uptime()
+      const uptimeH = Math.floor(uptime / 3600)
+      const uptimeM = Math.floor((uptime % 3600) / 60)
+      const uptimeS = Math.floor(uptime % 60)
+      const uptimeStr = uptimeH + 'h ' + uptimeM + 'm ' + uptimeS + 's'
+
+      const userCount = (db.prepare('SELECT COUNT(*) as c FROM api_keys').get() as any)?.c || 0
+      const checkCount = (db.prepare('SELECT COUNT(*) as c FROM checks').get() as any)?.c || 0
+      const monitorCount = (db.prepare("SELECT COUNT(*) as c FROM monitors WHERE status='active'").get() as any)?.c || 0
+
+      const recentChecks = db.prepare('SELECT url, status_code, response_time_ms, created_at FROM checks ORDER BY id DESC LIMIT 10').all() as any[]
+      let checksHtml = ''
+      for (const c of recentChecks) {
+        const cls = c.status_code === 200 ? 'good' : 'bad'
+        checksHtml += '<tr><td>' + c.url + '</td><td class="' + cls + '">' + c.status_code + '</td><td>' + c.response_time_ms + 'ms</td><td>' + c.created_at + '</td></tr>'
+      }
+
+      const statusPage = '<!doctype html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><meta http-equiv="refresh" content="30"/><title>Pulse Status</title><style>:root{--bg:#090b10;--panel:#11141d;--text:#f7f9ff;--muted:#9aa4bf;--accent:#39c5ff;--border:#2a3040;--good:#3ddc97;--bad:#ff6378}*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--text);padding:2rem}.wrap{max-width:960px;margin:0 auto}h1{color:var(--accent);margin:0 0 .5rem}.stat{display:inline-block;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:1rem 1.5rem;margin:.5rem .5rem .5rem 0}.stat .val{font-size:1.8rem;font-weight:700;color:var(--accent)}.stat .lbl{color:var(--muted);font-size:.85rem}table{width:100%;border-collapse:collapse;margin-top:1rem}th,td{text-align:left;padding:.5rem .7rem;border-bottom:1px solid var(--border)}th{color:var(--muted);font-size:.85rem;text-transform:uppercase}.good{color:var(--good)}.bad{color:var(--bad)}a{color:var(--accent);text-decoration:none}.note{color:var(--muted);margin-top:1rem;font-size:.85rem}</style></head><body><div class="wrap"><a href="/">&larr; Home</a><h1>Pulse Status</h1><div><div class="stat"><div class="val">' + uptimeStr + '</div><div class="lbl">Uptime</div></div><div class="stat"><div class="val">' + userCount + '</div><div class="lbl">Registered Users</div></div><div class="stat"><div class="val">' + checkCount + '</div><div class="lbl">Total Checks</div></div><div class="stat"><div class="val">' + monitorCount + '</div><div class="lbl">Active Monitors</div></div></div><h2 style="margin-top:1.5rem">Recent Checks</h2><table><tr><th>URL</th><th>Status</th><th>Time</th><th>Date</th></tr>' + checksHtml + '</table><p class="note">Auto-refreshes every 30 seconds.</p></div></body></html>'
+
+      return withCors(statusPage, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      })
     }
 
     if (path === '/dashboard') {
@@ -1424,6 +1460,113 @@ const server = Bun.serve({
 
       const history = getHistoryForApiKey(row.key)
       return withJson(history)
+    }
+
+    if (path === '/api/seo') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'seo')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const response = await fetch(normalized)
+        const html = await response.text()
+
+        const titleMatch = html.match(/<title>(.*?)<\/title>/i)
+        const title = titleMatch ? titleMatch[1].trim() : null
+
+        const descMatch = html.match(/<meta\s+name=["']description["']\s+content=["'](.*?)["']/i)
+          || html.match(/<meta\s+content=["'](.*?)["']\s+name=["']description["']/i)
+        const description = descMatch ? descMatch[1].trim() : null
+
+        const h1Matches = html.match(/<h1[\s>]/gi)
+        const h1Count = h1Matches ? h1Matches.length : 0
+
+        const imgTags = html.match(/<img\s[^>]*>/gi) || []
+        let imagesWithoutAlt = 0
+        for (const img of imgTags) {
+          if (!/\balt\s*=/i.test(img)) imagesWithoutAlt++
+        }
+
+        const canonicalMatch = html.match(/<link\s[^>]*rel=["']canonical["'][^>]*href=["'](.*?)["']/i)
+          || html.match(/<link\s[^>]*href=["'](.*?)["'][^>]*rel=["']canonical["']/i)
+        const hasCanonical = !!canonicalMatch
+        const canonicalUrl = canonicalMatch ? canonicalMatch[1] : null
+
+        const robotsMatch = html.match(/<meta\s+name=["']robots["']\s+content=["'](.*?)["']/i)
+          || html.match(/<meta\s+content=["'](.*?)["']\s+name=["']robots["']/i)
+        const robots = robotsMatch ? robotsMatch[1].trim() : null
+
+        let score = 100
+        if (!title) score -= 10
+        if (!description) score -= 10
+        score -= imagesWithoutAlt * 5
+        if (!hasCanonical) score -= 10
+        if (robots && /noindex/i.test(robots)) score -= 5
+        score = Math.max(0, Math.min(100, score))
+
+        return withJson({
+          url: normalized,
+          title,
+          description,
+          h1_count: h1Count,
+          images_without_alt: imagesWithoutAlt,
+          has_canonical: hasCanonical,
+          canonical_url: canonicalUrl,
+          robots,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Fetch failed'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/test-webhook') {
+      if (request.method !== 'POST') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const payload = await request.json().catch(() => null)
+      const webhookUrl = payload && typeof payload.url === 'string' ? payload.url.trim() : ''
+      if (!webhookUrl) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      try {
+        const t0 = performance.now()
+        const resp = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            test: true,
+            source: 'pulse',
+            timestamp: new Date().toISOString(),
+          }),
+        })
+        const elapsed = performance.now() - t0
+
+        return withJson({
+          delivered: true,
+          status_code: resp.status,
+          response_time_ms: Math.round(elapsed),
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Delivery failed'
+        return withJson({ delivered: false, error: message }, { status: 502 })
+      }
     }
 
     return withCors('Not Found', { status: 404 })
