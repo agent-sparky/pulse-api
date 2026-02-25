@@ -966,6 +966,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/cors-test?url=https://example.com'</pre>
       <p><strong>WAF Detector:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/waf?url=https://example.com'</pre>
+      <p><strong>Cache Analysis:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/cache-analysis?url=https://example.com'</pre>
+      <p><strong>Security.txt Checker:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/security-txt?url=https://example.com'</pre>
+      <p><strong>WHOIS Lookup:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/whois?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1840,6 +1846,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/permissions-policy?url=URL</h3><p class="desc">Permissions-Policy analyzer — parses Permissions-Policy header, lists directives and restricted features with score.</p><pre>curl -s \'http://147.93.131.124/api/permissions-policy?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/permissions-policy?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/cors-test?url=URL</h3><p class="desc">CORS tester — sends OPTIONS preflight request and inspects Access-Control-Allow-Origin, Methods, Headers, and Credentials.</p><pre>curl -s \'http://147.93.131.124/api/cors-test?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/cors-test?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/waf?url=URL</h3><p class="desc">WAF detector — identifies Web Application Firewalls via header fingerprinting (Cloudflare, AWS, Sucuri, Akamai, Imperva, Fastly, Barracuda).</p><pre>curl -s \'http://147.93.131.124/api/waf?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/waf?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/cache-analysis?url=URL</h3><p class="desc">Cache header analyzer — inspects Cache-Control, ETag, Last-Modified, Expires, Age, and Vary headers with directive parsing and caching score.</p><pre>curl -s \'http://147.93.131.124/api/cache-analysis?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/cache-analysis?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/security-txt?url=URL</h3><p class="desc">Security.txt checker — fetches /.well-known/security.txt and parses Contact, Policy, Encryption, Acknowledgments, Canonical, Preferred-Languages, and Expires fields.</p><pre>curl -s \'http://147.93.131.124/api/security-txt?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/security-txt?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/whois?url=URL</h3><p class="desc">WHOIS lookup — retrieves domain registration info including registrar, creation date, expiry date, name servers, and registrant organization.</p><pre>curl -s \'http://147.93.131.124/api/whois?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/whois?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -3966,6 +3975,230 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to detect WAF'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/cache-analysis') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'cache-analysis')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow' })
+
+        const cacheControl = resp.headers.get('cache-control')
+        const etag = resp.headers.get('etag')
+        const lastModified = resp.headers.get('last-modified')
+        const expires = resp.headers.get('expires')
+        const age = resp.headers.get('age')
+        const vary = resp.headers.get('vary')
+        const pragma = resp.headers.get('pragma')
+
+        const directives: string[] = []
+        if (cacheControl) {
+          for (const part of cacheControl.split(',')) {
+            directives.push(part.trim())
+          }
+        }
+
+        let score = 0
+        if (cacheControl) score += 30
+        if (etag) score += 20
+        if (lastModified) score += 15
+        if (directives.some(d => d.startsWith('max-age'))) score += 15
+        if (vary) score += 10
+        if (!directives.includes('no-store')) score += 10
+
+        return withJson({
+          url: normalized,
+          cache_control: cacheControl,
+          directives,
+          etag,
+          last_modified: lastModified,
+          expires,
+          age: age ? parseInt(age, 10) : null,
+          vary,
+          pragma,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to analyze cache headers'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/security-txt') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'security-txt')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const base = new URL(normalized).origin
+        const securityTxtUrl = base + '/.well-known/security.txt'
+        const resp = await fetch(securityTxtUrl, { redirect: 'follow' })
+        const contentType = (resp.headers.get('content-type') || '').toLowerCase()
+        const body = await resp.text()
+
+        const hasSecurityTxt = resp.status === 200 && (contentType.includes('text/plain') || body.includes('Contact:'))
+
+        const fields: Array<{ key: string; value: string }> = []
+        let contact: string | null = null
+        let policy: string | null = null
+        let encryption: string | null = null
+        let acknowledgments: string | null = null
+        let canonical: string | null = null
+        let preferredLanguages: string | null = null
+        let expiresField: string | null = null
+
+        if (hasSecurityTxt) {
+          for (const line of body.split('\n')) {
+            const trimmed = line.trim()
+            if (trimmed.startsWith('#') || !trimmed.includes(':')) continue
+            const colonIdx = trimmed.indexOf(':')
+            const key = trimmed.slice(0, colonIdx).trim()
+            const value = trimmed.slice(colonIdx + 1).trim()
+            if (!key || !value) continue
+            fields.push({ key, value })
+            const keyLower = key.toLowerCase()
+            if (keyLower === 'contact' && !contact) contact = value
+            if (keyLower === 'policy' && !policy) policy = value
+            if (keyLower === 'encryption' && !encryption) encryption = value
+            if (keyLower === 'acknowledgments' && !acknowledgments) acknowledgments = value
+            if (keyLower === 'canonical' && !canonical) canonical = value
+            if (keyLower === 'preferred-languages' && !preferredLanguages) preferredLanguages = value
+            if (keyLower === 'expires' && !expiresField) expiresField = value
+          }
+        }
+
+        let score = 0
+        if (hasSecurityTxt) score += 25
+        if (contact) score += 25
+        if (policy) score += 20
+        if (encryption) score += 15
+        if (expiresField) score += 15
+
+        return withJson({
+          url: normalized,
+          has_security_txt: hasSecurityTxt,
+          security_txt_url: securityTxtUrl,
+          fields,
+          contact,
+          policy,
+          encryption,
+          acknowledgments,
+          canonical,
+          preferred_languages: preferredLanguages,
+          expires: expiresField,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check security.txt'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/whois') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'whois')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const domain = new URL(normalized).hostname.replace(/^www\./, '')
+
+        const proc = Bun.spawn(['whois', domain], { stdout: 'pipe', stderr: 'pipe' })
+        const output = await new Response(proc.stdout).text()
+        await proc.exited
+
+        let registrar: string | null = null
+        let created: string | null = null
+        let expires: string | null = null
+        let updated: string | null = null
+        let registrantOrg: string | null = null
+        const nameServers: string[] = []
+
+        for (const line of output.split('\n')) {
+          const trimmed = line.trim()
+          const lower = trimmed.toLowerCase()
+          if (!registrar && (lower.startsWith('registrar:') || lower.startsWith('registrar name:'))) {
+            registrar = trimmed.split(':').slice(1).join(':').trim()
+          }
+          if (!created && (lower.startsWith('creation date:') || lower.startsWith('created:') || lower.startsWith('created on:'))) {
+            created = trimmed.split(':').slice(1).join(':').trim()
+          }
+          if (!expires && (lower.startsWith('registry expiry date:') || lower.startsWith('expiration date:') || lower.startsWith('expires:') || lower.startsWith('expires on:'))) {
+            expires = trimmed.split(':').slice(1).join(':').trim()
+          }
+          if (!updated && (lower.startsWith('updated date:') || lower.startsWith('last updated:'))) {
+            updated = trimmed.split(':').slice(1).join(':').trim()
+          }
+          if (!registrantOrg && (lower.startsWith('registrant organization:') || lower.startsWith('registrant:'))) {
+            registrantOrg = trimmed.split(':').slice(1).join(':').trim()
+          }
+          if (lower.startsWith('name server:') || lower.startsWith('nserver:')) {
+            const ns = trimmed.split(':').slice(1).join(':').trim().toLowerCase()
+            if (ns && !nameServers.includes(ns)) nameServers.push(ns)
+          }
+        }
+
+        let score = 0
+        if (registrar) score += 25
+        if (created) score += 25
+        if (expires) score += 25
+        if (nameServers.length > 0) score += 25
+
+        return withJson({
+          url: normalized,
+          domain,
+          registrar,
+          created,
+          expires,
+          updated,
+          registrant_organization: registrantOrg,
+          name_servers: nameServers,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to perform WHOIS lookup'
         return withJson({ error: message }, { status: 502 })
       }
     }
