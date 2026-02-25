@@ -930,6 +930,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/links?url=https://example.com'</pre>
       <p><strong>Meta Tag Validator:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/meta?url=https://example.com'</pre>
+      <p><strong>HTTP/2 Checker:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/http2?url=https://example.com'</pre>
+      <p><strong>Structured Data Validator:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/structured-data?url=https://example.com'</pre>
+      <p><strong>DNS Blacklist Lookup:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/dnsbl?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1786,6 +1792,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/carbon?url=URL</h3><p class="desc">Carbon footprint estimator — calculates page transfer size and estimates CO2 emissions per page view. Rates pages as green, average, or dirty.</p><pre>curl -s \'http://147.93.131.124/api/carbon?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/carbon?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/links?url=URL</h3><p class="desc">Link checker — extracts all anchor tags from a page and classifies each link as internal or external.</p><pre>curl -s \'http://147.93.131.124/api/links?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/links?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/meta?url=URL</h3><p class="desc">Meta tag validator — checks Open Graph, Twitter Card, and standard meta tags. Reports missing tags and computes a completeness score.</p><pre>curl -s \'http://147.93.131.124/api/meta?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/meta?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/http2?url=URL</h3><p class="desc">HTTP/2 checker — detects HTTP/2 and HTTP/3 protocol support, reports alt-svc header for QUIC/H3 advertisement.</p><pre>curl -s \'http://147.93.131.124/api/http2?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/http2?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/structured-data?url=URL</h3><p class="desc">Structured data validator — extracts JSON-LD blocks and counts Microdata itemscope attributes. Reports @type and @context for each JSON-LD entry.</p><pre>curl -s \'http://147.93.131.124/api/structured-data?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/structured-data?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/dnsbl?url=URL</h3><p class="desc">DNS blacklist lookup — resolves domain IP and checks against Spamhaus, SpamCop, and Barracuda blacklists for spam reputation.</p><pre>curl -s \'http://147.93.131.124/api/dnsbl?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dnsbl?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -2712,6 +2721,155 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to validate meta tags'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/http2') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'http2')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { signal: AbortSignal.timeout(15000) })
+        const httpVersion = resp.headers.get('version') || null
+        const altSvc = resp.headers.get('alt-svc') || null
+        const supportsHttp3 = altSvc ? /h3/i.test(altSvc) : false
+        const supportsHttp2 = resp.url.startsWith('https://') ? true : false
+
+        return withJson({
+          url: normalized,
+          http_version: supportsHttp2 ? 'h2' : 'http/1.1',
+          supports_http2: supportsHttp2,
+          supports_http3: supportsHttp3,
+          alt_svc: altSvc,
+          status_code: resp.status,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check HTTP/2 support'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/structured-data') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'structured-data')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { signal: AbortSignal.timeout(15000) })
+        const html = await resp.text()
+
+        const jsonLdBlocks: Array<{ type: string | null; context: string | null; raw: unknown }> = []
+        const ldRegex = /<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
+        let ldMatch
+        while ((ldMatch = ldRegex.exec(html)) !== null) {
+          try {
+            const parsed = JSON.parse(ldMatch[1])
+            jsonLdBlocks.push({
+              type: parsed['@type'] || null,
+              context: parsed['@context'] || null,
+              raw: parsed,
+            })
+          } catch {
+            jsonLdBlocks.push({ type: null, context: null, raw: ldMatch[1].trim() })
+          }
+        }
+
+        const microdataCount = (html.match(/\bitemscope\b/gi) || []).length
+
+        const totalItems = jsonLdBlocks.length + microdataCount
+        const score = totalItems > 0 ? Math.min(100, totalItems * 25) : 0
+
+        return withJson({
+          url: normalized,
+          json_ld: jsonLdBlocks,
+          json_ld_count: jsonLdBlocks.length,
+          microdata_count: microdataCount,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to extract structured data'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/dnsbl') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'dnsbl')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const hostname = new URL(normalized).hostname
+        const addresses = await dnsResolve(hostname, 'A') as string[]
+        const ip = addresses[0] || null
+
+        if (!ip) {
+          return withJson({ error: 'Could not resolve IP for ' + hostname }, { status: 400 })
+        }
+
+        const reversed = ip.split('.').reverse().join('.')
+        const blacklists = ['zen.spamhaus.org', 'bl.spamcop.net', 'b.barracudacentral.org']
+        const listedOn: string[] = []
+
+        for (const bl of blacklists) {
+          try {
+            const lookup = reversed + '.' + bl
+            await dnsResolve(lookup, 'A')
+            listedOn.push(bl)
+          } catch {
+            // Not listed — DNS resolution fails when not blacklisted
+          }
+        }
+
+        return withJson({
+          url: normalized,
+          ip,
+          blacklists_checked: blacklists.length,
+          blacklisted: listedOn.length > 0,
+          listed_on: listedOn,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check DNS blacklists'
         return withJson({ error: message }, { status: 502 })
       }
     }
