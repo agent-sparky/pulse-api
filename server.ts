@@ -972,6 +972,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/security-txt?url=https://example.com'</pre>
       <p><strong>WHOIS Lookup:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/whois?url=https://example.com'</pre>
+      <p><strong>Content-Encoding Analyzer:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/content-encoding?url=https://example.com'</pre>
+      <p><strong>Referrer-Policy Checker:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/referrer-policy?url=https://example.com'</pre>
+      <p><strong>X-Frame-Options Tester:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/x-frame-options?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1849,6 +1855,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/cache-analysis?url=URL</h3><p class="desc">Cache header analyzer — inspects Cache-Control, ETag, Last-Modified, Expires, Age, and Vary headers with directive parsing and caching score.</p><pre>curl -s \'http://147.93.131.124/api/cache-analysis?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/cache-analysis?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/security-txt?url=URL</h3><p class="desc">Security.txt checker — fetches /.well-known/security.txt and parses Contact, Policy, Encryption, Acknowledgments, Canonical, Preferred-Languages, and Expires fields.</p><pre>curl -s \'http://147.93.131.124/api/security-txt?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/security-txt?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/whois?url=URL</h3><p class="desc">WHOIS lookup — retrieves domain registration info including registrar, creation date, expiry date, name servers, and registrant organization.</p><pre>curl -s \'http://147.93.131.124/api/whois?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/whois?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/content-encoding?url=URL</h3><p class="desc">Content-Encoding analyzer — inspects Content-Encoding, Transfer-Encoding, and Vary headers to detect gzip, brotli, deflate, or zstd compression with scoring.</p><pre>curl -s \'http://147.93.131.124/api/content-encoding?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/content-encoding?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/referrer-policy?url=URL</h3><p class="desc">Referrer-Policy checker — parses the Referrer-Policy header and assesses privacy protection level (high, medium, low, none).</p><pre>curl -s \'http://147.93.131.124/api/referrer-policy?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/referrer-policy?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/x-frame-options?url=URL</h3><p class="desc">X-Frame-Options tester — inspects X-Frame-Options header and CSP frame-ancestors directive for clickjacking protection analysis.</p><pre>curl -s \'http://147.93.131.124/api/x-frame-options?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/x-frame-options?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -4199,6 +4208,203 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to perform WHOIS lookup'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/content-encoding') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'content-encoding')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow' })
+        const body = await resp.text()
+        const contentEncoding = resp.headers.get('content-encoding')
+        const transferEncoding = resp.headers.get('transfer-encoding')
+        const vary = resp.headers.get('vary')
+        const contentLength = resp.headers.get('content-length')
+
+        let compressionType = 'none'
+        if (contentEncoding) {
+          const ce = contentEncoding.toLowerCase()
+          if (ce.includes('br')) compressionType = 'brotli'
+          else if (ce.includes('gzip')) compressionType = 'gzip'
+          else if (ce.includes('deflate')) compressionType = 'deflate'
+          else if (ce.includes('zstd')) compressionType = 'zstd'
+          else compressionType = ce
+        }
+
+        const compressed = compressionType !== 'none'
+        const bodySize = body.length
+        const clSize = contentLength ? parseInt(contentLength, 10) : null
+
+        let score = 0
+        if (compressed) score += 60
+        if (vary && vary.toLowerCase().includes('accept-encoding')) score += 20
+        if (contentEncoding) score += 20
+
+        return withJson({
+          url: normalized,
+          content_encoding: contentEncoding,
+          transfer_encoding: transferEncoding,
+          vary,
+          compression_type: compressionType,
+          compressed,
+          content_length: clSize,
+          body_size: bodySize,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to analyze content encoding'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/referrer-policy') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'referrer-policy')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow' })
+        const policy = resp.headers.get('referrer-policy')
+        const hasPolicy = !!policy
+
+        const policyScores: Record<string, number> = {
+          'no-referrer': 100,
+          'strict-origin-when-cross-origin': 100,
+          'same-origin': 90,
+          'strict-origin': 85,
+          'origin': 70,
+          'origin-when-cross-origin': 60,
+          'no-referrer-when-downgrade': 40,
+          'unsafe-url': 10,
+        }
+
+        const privacyLevels: Record<string, string> = {
+          'no-referrer': 'high',
+          'strict-origin-when-cross-origin': 'high',
+          'same-origin': 'high',
+          'strict-origin': 'medium',
+          'origin': 'medium',
+          'origin-when-cross-origin': 'medium',
+          'no-referrer-when-downgrade': 'low',
+          'unsafe-url': 'none',
+        }
+
+        const policyLower = policy ? policy.toLowerCase().trim() : ''
+        const score = hasPolicy ? (policyScores[policyLower] || 50) : 25
+        const privacyLevel = hasPolicy ? (privacyLevels[policyLower] || 'medium') : 'unknown'
+
+        return withJson({
+          url: normalized,
+          has_policy: hasPolicy,
+          policy: policy || null,
+          privacy_level: privacyLevel,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check referrer policy'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/x-frame-options') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'x-frame-options')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow' })
+        const xfo = resp.headers.get('x-frame-options')
+        const csp = resp.headers.get('content-security-policy')
+
+        const hasXfo = !!xfo
+        let xfoValue = xfo ? xfo.toUpperCase().trim() : null
+
+        let hasFrameAncestors = false
+        let cspFrameAncestors: string | null = null
+        if (csp) {
+          const faMatch = csp.match(/frame-ancestors\s+([^;]+)/i)
+          if (faMatch) {
+            hasFrameAncestors = true
+            cspFrameAncestors = faMatch[1].trim()
+          }
+        }
+
+        let protectionLevel = 'none'
+        let score = 0
+
+        if (hasFrameAncestors && hasXfo) {
+          protectionLevel = 'strong'
+          score = 100
+        } else if (hasFrameAncestors) {
+          protectionLevel = 'good'
+          score = 85
+        } else if (hasXfo) {
+          if (xfoValue === 'DENY') {
+            protectionLevel = 'strong'
+            score = 90
+          } else if (xfoValue === 'SAMEORIGIN') {
+            protectionLevel = 'medium'
+            score = 60
+          } else {
+            protectionLevel = 'weak'
+            score = 30
+          }
+        }
+
+        return withJson({
+          url: normalized,
+          x_frame_options: xfo,
+          has_xfo: hasXfo,
+          has_frame_ancestors: hasFrameAncestors,
+          csp_frame_ancestors: cspFrameAncestors,
+          protection_level: protectionLevel,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check X-Frame-Options'
         return withJson({ error: message }, { status: 502 })
       }
     }
