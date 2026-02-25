@@ -978,6 +978,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/referrer-policy?url=https://example.com'</pre>
       <p><strong>X-Frame-Options Tester:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/x-frame-options?url=https://example.com'</pre>
+      <p><strong>Subdomain Enumerator:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/subdomains?url=https://example.com'</pre>
+      <p><strong>HTTP Method Tester:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/http-methods?url=https://example.com'</pre>
+      <p><strong>Server Banner Analyzer:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/server-banner?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1858,6 +1864,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/content-encoding?url=URL</h3><p class="desc">Content-Encoding analyzer — inspects Content-Encoding, Transfer-Encoding, and Vary headers to detect gzip, brotli, deflate, or zstd compression with scoring.</p><pre>curl -s \'http://147.93.131.124/api/content-encoding?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/content-encoding?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/referrer-policy?url=URL</h3><p class="desc">Referrer-Policy checker — parses the Referrer-Policy header and assesses privacy protection level (high, medium, low, none).</p><pre>curl -s \'http://147.93.131.124/api/referrer-policy?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/referrer-policy?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/x-frame-options?url=URL</h3><p class="desc">X-Frame-Options tester — inspects X-Frame-Options header and CSP frame-ancestors directive for clickjacking protection analysis.</p><pre>curl -s \'http://147.93.131.124/api/x-frame-options?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/x-frame-options?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/subdomains?url=URL</h3><p class="desc">Subdomain enumerator — checks 20 common subdomain prefixes via DNS resolution and returns live subdomains with IP addresses.</p><pre>curl -s \'http://147.93.131.124/api/subdomains?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/subdomains?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/http-methods?url=URL</h3><p class="desc">HTTP method tester — sends OPTIONS request and tests HEAD, PUT, DELETE, PATCH methods. Identifies risky methods enabled on the server.</p><pre>curl -s \'http://147.93.131.124/api/http-methods?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/http-methods?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/server-banner?url=URL</h3><p class="desc">Server banner analyzer — extracts and analyzes the Server response header for version disclosure risks and software identification.</p><pre>curl -s \'http://147.93.131.124/api/server-banner?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/server-banner?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -4405,6 +4414,194 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to check X-Frame-Options'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/subdomains') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'subdomains')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const domain = new URL(normalized).hostname
+        const prefixes = ['www', 'mail', 'ftp', 'admin', 'blog', 'api', 'dev', 'staging', 'test', 'app', 'cdn', 'shop', 'store', 'portal', 'support', 'docs', 'status', 'm', 'mobile', 'secure']
+        const found: Array<{ subdomain: string; ip: string }> = []
+
+        const resolver = new Resolver()
+        for (const prefix of prefixes) {
+          const sub = prefix + '.' + domain
+          try {
+            const ips = await resolver.resolve4(sub)
+            if (ips.length > 0) {
+              found.push({ subdomain: sub, ip: ips[0] })
+            }
+          } catch {}
+        }
+
+        const score = found.length === 0 ? 0 : Math.min(100, found.length * 10)
+
+        return withJson({
+          url: normalized,
+          domain,
+          subdomains_checked: prefixes.length,
+          subdomains_found: found,
+          count: found.length,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to enumerate subdomains'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/http-methods') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'http-methods')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+
+        let allowHeader: string | null = null
+        try {
+          const optResp = await fetch(normalized, { method: 'OPTIONS', redirect: 'follow' })
+          allowHeader = optResp.headers.get('allow')
+        } catch {}
+
+        const methodsToTest = ['HEAD', 'PUT', 'DELETE', 'PATCH']
+        const methodsTested: Record<string, number> = {}
+
+        for (const m of methodsToTest) {
+          try {
+            const resp = await fetch(normalized, { method: m, redirect: 'follow' })
+            methodsTested[m] = resp.status
+          } catch {
+            methodsTested[m] = 0
+          }
+        }
+
+        const riskyMethods: string[] = []
+        const risky = ['PUT', 'DELETE', 'PATCH', 'TRACE', 'CONNECT']
+        for (const m of risky) {
+          const code = methodsTested[m]
+          if (code && code >= 200 && code < 300) {
+            riskyMethods.push(m)
+          }
+        }
+
+        if (allowHeader) {
+          const allowed = allowHeader.split(',').map(s => s.trim().toUpperCase())
+          for (const m of risky) {
+            if (allowed.includes(m) && !riskyMethods.includes(m)) {
+              riskyMethods.push(m)
+            }
+          }
+        }
+
+        let score = 100
+        score -= riskyMethods.length * 20
+
+        return withJson({
+          url: normalized,
+          allow_header: allowHeader,
+          methods_tested: methodsTested,
+          risky_methods: riskyMethods,
+          score: Math.max(0, score),
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to test HTTP methods'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/server-banner') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'server-banner')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow' })
+        const serverHeader = resp.headers.get('server')
+        const xPoweredBy = resp.headers.get('x-powered-by')
+
+        const hasServerHeader = !!serverHeader
+        let serverSoftware: string | null = null
+        let versionDisclosed = false
+        let riskLevel = 'none'
+        let score = 100
+
+        if (serverHeader) {
+          const versionMatch = serverHeader.match(/[\d]+\.[\d]+/)
+          const osMatch = serverHeader.match(/(Ubuntu|Debian|CentOS|Red Hat|Windows|Unix|Linux)/i)
+
+          const parts = serverHeader.split(/[\s\/]/)
+          serverSoftware = parts[0] || serverHeader
+
+          if (osMatch && versionMatch) {
+            versionDisclosed = true
+            riskLevel = 'critical'
+            score = 10
+          } else if (versionMatch) {
+            versionDisclosed = true
+            riskLevel = 'medium'
+            score = 40
+          } else {
+            riskLevel = 'low'
+            score = 80
+          }
+        }
+
+        return withJson({
+          url: normalized,
+          server_header: serverHeader,
+          has_server_header: hasServerHeader,
+          x_powered_by: xPoweredBy,
+          server_software: serverSoftware,
+          version_disclosed: versionDisclosed,
+          risk_level: riskLevel,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to analyze server banner'
         return withJson({ error: message }, { status: 502 })
       }
     }
