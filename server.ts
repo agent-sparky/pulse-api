@@ -1,6 +1,6 @@
 import tls from 'node:tls'
 import { randomBytes } from 'node:crypto'
-import { resolve as dnsResolve } from 'node:dns/promises'
+import { resolve as dnsResolve, Resolver } from 'node:dns/promises'
 import { appendFileSync } from 'node:fs'
 import { Database } from 'bun:sqlite'
 import Stripe from 'stripe'
@@ -954,6 +954,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/cookie-consent?url=https://example.com'</pre>
       <p><strong>TLS Cipher Suite Analyzer:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/tls-ciphers?url=https://example.com'</pre>
+      <p><strong>HSTS Preload Checker:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/hsts-preload?url=https://example.com'</pre>
+      <p><strong>WebSocket Detector:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/websocket?url=https://example.com'</pre>
+      <p><strong>DNS Propagation Checker:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/dns-propagation?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1822,6 +1828,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/sri?url=URL</h3><p class="desc">Subresource Integrity checker — scans script and stylesheet tags for SRI integrity attributes. Returns resource list and coverage score.</p><pre>curl -s \'http://147.93.131.124/api/sri?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/sri?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/cookie-consent?url=URL</h3><p class="desc">Cookie consent detector — scans for GDPR consent banners, detects platforms (OneTrust, CookieBot, etc.), and identifies privacy signals.</p><pre>curl -s \'http://147.93.131.124/api/cookie-consent?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/cookie-consent?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/tls-ciphers?url=URL</h3><p class="desc">TLS cipher suite analyzer — connects to host and reports negotiated cipher, protocol version, key bits, and security warnings.</p><pre>curl -s \'http://147.93.131.124/api/tls-ciphers?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/tls-ciphers?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/hsts-preload?url=URL</h3><p class="desc">HSTS preload checker — inspects Strict-Transport-Security header for max-age, includeSubDomains, and preload directives. Reports preload readiness and score.</p><pre>curl -s \'http://147.93.131.124/api/hsts-preload?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/hsts-preload?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/websocket?url=URL</h3><p class="desc">WebSocket support detector — checks for Upgrade headers, scans HTML for ws:// and wss:// URLs, detects Socket.IO, SockJS, and SignalR libraries.</p><pre>curl -s \'http://147.93.131.124/api/websocket?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/websocket?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-propagation?url=URL</h3><p class="desc">DNS propagation checker — queries Google, Cloudflare, OpenDNS, and system default resolvers. Compares A records for consistency and propagation status.</p><pre>curl -s \'http://147.93.131.124/api/dns-propagation?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-propagation?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -3591,6 +3600,193 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to analyze TLS ciphers'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- HSTS Preload Checker ---
+    if (path === '/api/hsts-preload') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'hsts-preload')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow' })
+        const hstsHeader = resp.headers.get('strict-transport-security') || ''
+
+        const hasHsts = hstsHeader.length > 0
+        const maxAgeMatch = hstsHeader.match(/max-age\s*=\s*(\d+)/i)
+        const maxAge = maxAgeMatch ? parseInt(maxAgeMatch[1], 10) : 0
+        const includeSubDomains = /includeSubDomains/i.test(hstsHeader)
+        const preload = /preload/i.test(hstsHeader)
+        const isHttps = normalized.startsWith('https://')
+
+        const warnings: string[] = []
+        if (!hasHsts) warnings.push('No Strict-Transport-Security header found')
+        if (hasHsts && maxAge < 31536000) warnings.push('max-age must be at least 31536000 (1 year) for preload')
+        if (hasHsts && !includeSubDomains) warnings.push('includeSubDomains directive is required for preload')
+        if (hasHsts && !preload) warnings.push('preload directive is missing')
+        if (!isHttps) warnings.push('Site must be served over HTTPS for preload')
+
+        const preloadReady = hasHsts && maxAge >= 31536000 && includeSubDomains && preload && isHttps
+        let score = 0
+        if (hasHsts) score += 25
+        if (maxAge >= 31536000) score += 25
+        if (includeSubDomains) score += 25
+        if (preload) score += 25
+
+        return withJson({
+          url: normalized,
+          has_hsts: hasHsts,
+          raw_header: hstsHeader || null,
+          max_age: maxAge,
+          include_sub_domains: includeSubDomains,
+          preload,
+          preload_ready: preloadReady,
+          warnings,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check HSTS'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- WebSocket Support Detector ---
+    if (path === '/api/websocket') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'websocket')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow' })
+        const html = await resp.text()
+
+        const upgradeHeader = resp.headers.get('upgrade') || ''
+        const connectionHeader = resp.headers.get('connection') || ''
+        const hasWebsocketHeaders = /websocket/i.test(upgradeHeader) || /upgrade/i.test(connectionHeader)
+
+        const wsUrlMatches = html.match(/wss?:\/\/[^\s"'<>]+/gi) || []
+        const wsUrls = [...new Set(wsUrlMatches)]
+
+        const socketIoDetected = /socket\.io/i.test(html) || /io\(\s*['"]wss?:/i.test(html)
+        const sockjsDetected = /sockjs/i.test(html)
+        const signalrDetected = /signalr/i.test(html)
+
+        const libraries: string[] = []
+        if (socketIoDetected) libraries.push('Socket.IO')
+        if (sockjsDetected) libraries.push('SockJS')
+        if (signalrDetected) libraries.push('SignalR')
+
+        let score = 0
+        if (hasWebsocketHeaders) score += 40
+        if (wsUrls.length > 0) score += 40
+        if (libraries.length > 0) score += 20
+
+        return withJson({
+          url: normalized,
+          has_websocket_headers: hasWebsocketHeaders,
+          upgrade_header: upgradeHeader || null,
+          ws_urls_found: wsUrls,
+          socket_io_detected: socketIoDetected,
+          sockjs_detected: sockjsDetected,
+          signalr_detected: signalrDetected,
+          libraries_detected: libraries,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to detect WebSocket support'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- DNS Propagation Checker ---
+    if (path === '/api/dns-propagation') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'dns-propagation')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const hostname = new URL(normalized).hostname
+        const resolverConfigs = [
+          { name: 'Google', ip: '8.8.8.8' },
+          { name: 'Cloudflare', ip: '1.1.1.1' },
+          { name: 'OpenDNS', ip: '208.67.222.222' },
+        ]
+
+        const results: Array<{ name: string; ip: string; records: string[]; error?: string }> = []
+
+        try {
+          const records = await dnsResolve(hostname, 'A')
+          results.push({ name: 'System Default', ip: 'system', records: records as string[] })
+        } catch (e) {
+          results.push({ name: 'System Default', ip: 'system', records: [], error: e instanceof Error ? e.message : 'resolve failed' })
+        }
+
+        for (const cfg of resolverConfigs) {
+          try {
+            const resolver = new Resolver()
+            resolver.setServers([cfg.ip])
+            const records = await resolver.resolve(hostname, 'A')
+            results.push({ name: cfg.name, ip: cfg.ip, records: records as string[] })
+          } catch (e) {
+            results.push({ name: cfg.name, ip: cfg.ip, records: [], error: e instanceof Error ? e.message : 'resolve failed' })
+          }
+        }
+
+        const recordSets = results.filter(r => r.records.length > 0).map(r => JSON.stringify([...r.records].sort()))
+        const uniqueSets = [...new Set(recordSets)]
+        const consistent = uniqueSets.length <= 1
+        const propagationComplete = consistent && results.every(r => r.records.length > 0)
+
+        return withJson({
+          url: normalized,
+          hostname,
+          resolvers: results,
+          consistent,
+          propagation_complete: propagationComplete,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check DNS propagation'
         return withJson({ error: message }, { status: 502 })
       }
     }
