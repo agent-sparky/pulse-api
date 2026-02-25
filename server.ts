@@ -906,6 +906,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/headers?url=https://example.com'</pre>
       <p><strong>Technology Stack Detection:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/tech?url=https://example.com'</pre>
+      <p><strong>Site Quality Score:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/score?url=https://example.com'</pre>
+      <p><strong>Sitemap Parser:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/sitemap?url=https://example.com/sitemap.xml'</pre>
+      <p><strong>SSL Certificate Monitor:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/ssl?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1750,6 +1756,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/uptime</h3><p class="desc">Global uptime statistics — server uptime, total checks, monitors, users, checks in last 24h.</p><pre>curl -s http://147.93.131.124/api/uptime</pre><button class="try-btn" onclick="tryIt(this,\'/api/uptime\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/headers?url=URL</h3><p class="desc">Security headers audit — checks 10 security headers (HSTS, CSP, X-Frame-Options, etc.) and returns a score.</p><pre>curl -s \'http://147.93.131.124/api/headers?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/headers?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/tech?url=URL</h3><p class="desc">Technology stack detection — identifies server software, frameworks, and technologies from headers and HTML.</p><pre>curl -s \'http://147.93.131.124/api/tech?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/tech?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/score?url=URL</h3><p class="desc">Aggregate site quality score — combines performance (30%), SEO (30%), and security (40%) into an overall score.</p><pre>curl -s \'http://147.93.131.124/api/score?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/score?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/sitemap?url=URL</h3><p class="desc">XML sitemap parser — fetches and parses sitemap XML, extracts all URLs from &lt;loc&gt; tags (max 100).</p><pre>curl -s \'http://147.93.131.124/api/sitemap?url=https://example.com/sitemap.xml\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/sitemap?url=https://example.com/sitemap.xml\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/ssl?url=URL</h3><p class="desc">Detailed SSL certificate monitor — issuer, expiry date, days until expiry, TLS protocol version, and expiry warnings.</p><pre>curl -s \'http://147.93.131.124/api/ssl?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/ssl?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -1897,6 +1906,205 @@ const server = Bun.serve({
         return withJson({ url: normalized, server: serverHeader, powered_by: poweredBy, via, technologies: unique, cookies })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Fetch failed'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/score') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'score')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const t0 = performance.now()
+        const response = await fetch(normalized)
+        const ttfb = performance.now() - t0
+        const buf = await response.arrayBuffer()
+        const totalMs = performance.now() - t0
+        const sizeBytes = buf.byteLength
+        const compressed = !!response.headers.get('content-encoding')
+        const respHeaders = response.headers
+
+        let perfScore = 100
+        if (ttfb > 200) perfScore -= Math.floor((ttfb - 200) / 100)
+        if (sizeBytes > 500 * 1024) perfScore -= Math.floor((sizeBytes - 500 * 1024) / (50 * 1024))
+        if (!compressed) perfScore -= 10
+        perfScore = Math.max(0, Math.min(100, perfScore))
+
+        const htmlText = new TextDecoder().decode(buf)
+        const titleMatch = htmlText.match(/<title>(.*?)<\/title>/i)
+        const descMatch = htmlText.match(/<meta\s+name=["']description["']\s+content=["'](.*?)["']/i)
+          || htmlText.match(/<meta\s+content=["'](.*?)["']\s+name=["']description["']/i)
+        const canonicalMatch = htmlText.match(/<link\s[^>]*rel=["']canonical["'][^>]*href=["'](.*?)["']/i)
+        const imgTags = htmlText.match(/<img\s[^>]*>/gi) || []
+        let imgsNoAlt = 0
+        for (const img of imgTags) { if (!/\balt\s*=/i.test(img)) imgsNoAlt++ }
+
+        let seoScore = 100
+        if (!titleMatch) seoScore -= 10
+        if (!descMatch) seoScore -= 10
+        seoScore -= imgsNoAlt * 5
+        if (!canonicalMatch) seoScore -= 10
+        seoScore = Math.max(0, Math.min(100, seoScore))
+
+        const secHeaders = ['strict-transport-security', 'x-content-type-options', 'x-frame-options', 'content-security-policy', 'x-xss-protection', 'referrer-policy', 'permissions-policy', 'cross-origin-opener-policy', 'cross-origin-resource-policy', 'cross-origin-embedder-policy']
+        let secFound = 0
+        for (const h of secHeaders) { if (respHeaders.get(h)) secFound++ }
+        const securityScore = secFound * 10
+
+        const overallScore = Math.round(perfScore * 0.3 + seoScore * 0.3 + securityScore * 0.4)
+
+        return withJson({
+          url: normalized,
+          performance_score: perfScore,
+          seo_score: seoScore,
+          security_score: securityScore,
+          overall_score: overallScore,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Fetch failed'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/sitemap') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'sitemap')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const response = await fetch(normalized)
+        const xml = await response.text()
+
+        const locMatches = xml.match(/<loc>(.*?)<\/loc>/gi) || []
+        const urls: string[] = []
+        for (const m of locMatches) {
+          const inner = m.replace(/<\/?loc>/gi, '').trim()
+          if (inner && urls.length < 100) urls.push(inner)
+        }
+
+        return withJson({
+          url: normalized,
+          urls_found: locMatches.length,
+          urls,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Fetch failed'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/ssl') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'ssl')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const parsedUrl = new URL(normalized)
+
+        if (parsedUrl.protocol !== 'https:') {
+          return withJson({ url: normalized, valid: false, issuer: null, expires_at: null, days_until_expiry: null, protocol: null, warning: 'not_https' })
+        }
+
+        const host = parsedUrl.hostname
+        const port = parsedUrl.port ? Number(parsedUrl.port) : 443
+
+        const sslResult = await new Promise<{ valid: boolean; issuer: string | null; expires_at: string | null; days_until_expiry: number | null; protocol: string | null; warning: string | null }>((resolve) => {
+          let settled = false
+          const finalize = (val: any) => { if (settled) return; settled = true; socket.end(); resolve(val) }
+
+          const socket = tls.connect({ host, port, servername: host, rejectUnauthorized: false })
+
+          socket.once('secureConnect', () => {
+            try {
+              const cert = socket.getPeerCertificate(true) as any
+              const proto = socket.getProtocol?.() || null
+
+              if (!cert || Object.keys(cert).length === 0) {
+                finalize({ valid: false, issuer: null, expires_at: null, days_until_expiry: null, protocol: proto, warning: 'no_certificate' })
+                return
+              }
+
+              const expiry = cert.valid_to ? new Date(cert.valid_to) : null
+              let valid = true
+              let daysUntil: number | null = null
+              let warning: string | null = null
+
+              if (expiry && !Number.isNaN(expiry.getTime())) {
+                daysUntil = Math.floor((expiry.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+                if (daysUntil < 0) { valid = false; warning = 'expired' }
+                else if (daysUntil < 30) { warning = 'expires_soon' }
+              } else {
+                valid = false
+              }
+
+              try { tls.checkServerIdentity(host, cert) } catch { valid = false }
+
+              finalize({
+                valid,
+                issuer: extractIssuer(cert),
+                expires_at: cert.valid_to || null,
+                days_until_expiry: daysUntil,
+                protocol: proto,
+                warning,
+              })
+            } catch {
+              finalize({ valid: false, issuer: null, expires_at: null, days_until_expiry: null, protocol: null, warning: 'parse_error' })
+            }
+          })
+
+          socket.once('error', () => {
+            finalize({ valid: false, issuer: null, expires_at: null, days_until_expiry: null, protocol: null, warning: 'connection_error' })
+          })
+
+          socket.setTimeout(5000, () => {
+            finalize({ valid: false, issuer: null, expires_at: null, days_until_expiry: null, protocol: null, warning: 'timeout' })
+            socket.destroy(new Error('SSL timeout'))
+          })
+        })
+
+        return withJson({ url: normalized, ...sslResult })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'SSL check failed'
         return withJson({ error: message }, { status: 502 })
       }
     }
