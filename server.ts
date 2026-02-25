@@ -942,6 +942,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/html-validate?url=https://example.com'</pre>
       <p><strong>Favicon Checker:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/favicon?url=https://example.com'</pre>
+      <p><strong>Lighthouse Audit:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/lighthouse?url=https://example.com'</pre>
+      <p><strong>CSP Analyzer:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/csp?url=https://example.com'</pre>
+      <p><strong>Response Headers Inspector:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/response-headers?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1804,6 +1810,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/og-image?url=URL</h3><p class="desc">Open Graph image preview — extracts og:image, og:title, og:description, og:type, and og:site_name meta tags from any page.</p><pre>curl -s \'http://147.93.131.124/api/og-image?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/og-image?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/html-validate?url=URL</h3><p class="desc">HTML validator — checks for missing doctype, lang, title, charset, viewport, alt attributes, duplicate IDs, head, and body tags. Returns issues array and score.</p><pre>curl -s \'http://147.93.131.124/api/html-validate?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/html-validate?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/favicon?url=URL</h3><p class="desc">Favicon checker — detects link rel="icon", shortcut icon, and apple-touch-icon tags. Falls back to /favicon.ico HEAD check. Returns all favicons with href, rel, type, and sizes.</p><pre>curl -s \'http://147.93.131.124/api/favicon?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/favicon?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/lighthouse?url=URL</h3><p class="desc">Lighthouse audit — computes performance, accessibility, SEO, and security scores inline. Returns overall score and letter grade (A-F).</p><pre>curl -s \'http://147.93.131.124/api/lighthouse?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/lighthouse?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/csp?url=URL</h3><p class="desc">CSP analyzer — parses Content-Security-Policy header, extracts directives, detects unsafe-inline and unsafe-eval, and computes a security score.</p><pre>curl -s \'http://147.93.131.124/api/csp?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/csp?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/response-headers?url=URL</h3><p class="desc">Response headers inspector — returns all response headers annotated with category (security, caching, cors, server, content, custom).</p><pre>curl -s \'http://147.93.131.124/api/response-headers?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/response-headers?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -3133,6 +3142,217 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to check favicons'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- Lighthouse Audit ---
+    if (path === '/api/lighthouse') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'lighthouse')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const start = performance.now()
+        const resp = await fetch(normalized, { redirect: 'follow' })
+        const elapsed = performance.now() - start
+        const html = await resp.text()
+        const sizeKb = new TextEncoder().encode(html).length / 1024
+
+        // Performance score (TTFB + size based)
+        let perfScore = 100
+        if (elapsed > 3000) perfScore -= 40
+        else if (elapsed > 1500) perfScore -= 25
+        else if (elapsed > 500) perfScore -= 10
+        if (sizeKb > 500) perfScore -= 20
+        else if (sizeKb > 200) perfScore -= 10
+        if (!resp.headers.get('content-encoding')) perfScore -= 10
+        perfScore = Math.max(0, Math.min(100, perfScore))
+
+        // Accessibility score
+        let a11yScore = 100
+        const imgsNoAlt = (html.match(/<img\b(?![^>]*\balt\s*=)[^>]*>/gi) || []).length
+        if (imgsNoAlt > 0) a11yScore -= Math.min(30, imgsNoAlt * 5)
+        if (!/<html[^>]*\blang\s*=/i.test(html)) a11yScore -= 15
+        if (!/<h1[\s>]/i.test(html)) a11yScore -= 10
+        if (!/<main[\s>]/i.test(html)) a11yScore -= 10
+        if (!/<nav[\s>]/i.test(html)) a11yScore -= 5
+        a11yScore = Math.max(0, Math.min(100, a11yScore))
+
+        // SEO score
+        let seoScore = 100
+        if (!/<title[^>]*>[^<]+<\/title>/i.test(html)) seoScore -= 25
+        if (!/<meta[^>]*name\s*=\s*["']description["'][^>]*>/i.test(html)) seoScore -= 20
+        if (!/<h1[\s>]/i.test(html)) seoScore -= 15
+        if (!/<meta[^>]*property\s*=\s*["']og:title["'][^>]*>/i.test(html)) seoScore -= 10
+        if (!/<link[^>]*rel\s*=\s*["']canonical["'][^>]*>/i.test(html)) seoScore -= 10
+        seoScore = Math.max(0, Math.min(100, seoScore))
+
+        // Security score (from headers)
+        let secScore = 0
+        const secHeaders = ['strict-transport-security', 'x-content-type-options', 'x-frame-options', 'content-security-policy', 'referrer-policy', 'permissions-policy', 'x-xss-protection', 'cross-origin-opener-policy', 'cross-origin-resource-policy', 'cross-origin-embedder-policy']
+        for (const h of secHeaders) {
+          if (resp.headers.get(h)) secScore += 10
+        }
+
+        const overall = Math.round(perfScore * 0.25 + a11yScore * 0.25 + seoScore * 0.25 + secScore * 0.25)
+        let grade = 'F'
+        if (overall >= 90) grade = 'A'
+        else if (overall >= 80) grade = 'B'
+        else if (overall >= 70) grade = 'C'
+        else if (overall >= 60) grade = 'D'
+
+        return withJson({
+          url: normalized,
+          performance: perfScore,
+          accessibility: a11yScore,
+          seo: seoScore,
+          security: secScore,
+          overall,
+          grade,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to run lighthouse audit'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- CSP Analyzer ---
+    if (path === '/api/csp') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'csp')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow' })
+        const cspHeader = resp.headers.get('content-security-policy') || ''
+        const hasCsp = cspHeader.length > 0
+
+        const directives: Array<{ name: string; value: string }> = []
+        let hasUnsafeInline = false
+        let hasUnsafeEval = false
+
+        if (hasCsp) {
+          const parts = cspHeader.split(';').map(s => s.trim()).filter(Boolean)
+          for (const part of parts) {
+            const spaceIdx = part.indexOf(' ')
+            const name = spaceIdx > 0 ? part.substring(0, spaceIdx) : part
+            const value = spaceIdx > 0 ? part.substring(spaceIdx + 1).trim() : ''
+            directives.push({ name, value })
+            if (value.includes("'unsafe-inline'")) hasUnsafeInline = true
+            if (value.includes("'unsafe-eval'")) hasUnsafeEval = true
+          }
+        }
+
+        let score = 0
+        if (hasCsp) {
+          score += 30
+          const directiveNames = directives.map(d => d.name)
+          if (directiveNames.includes('default-src')) score += 15
+          if (directiveNames.includes('script-src')) score += 15
+          if (directiveNames.includes('style-src')) score += 10
+          if (directiveNames.includes('img-src')) score += 5
+          if (directiveNames.includes('object-src')) score += 5
+          if (directiveNames.includes('frame-src') || directiveNames.includes('frame-ancestors')) score += 5
+          if (!hasUnsafeInline) score += 10
+          if (!hasUnsafeEval) score += 5
+        }
+        score = Math.min(100, score)
+
+        return withJson({
+          url: normalized,
+          has_csp: hasCsp,
+          raw_header: hasCsp ? cspHeader : null,
+          directives,
+          directive_count: directives.length,
+          has_unsafe_inline: hasUnsafeInline,
+          has_unsafe_eval: hasUnsafeEval,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to analyze CSP'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- Response Headers Inspector ---
+    if (path === '/api/response-headers') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'response-headers')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow' })
+
+        const securityNames = ['strict-transport-security', 'x-content-type-options', 'x-frame-options', 'content-security-policy', 'referrer-policy', 'permissions-policy', 'x-xss-protection', 'cross-origin-opener-policy', 'cross-origin-resource-policy', 'cross-origin-embedder-policy']
+        const cachingNames = ['cache-control', 'expires', 'etag', 'last-modified', 'age', 'vary']
+        const corsNames = ['access-control-allow-origin', 'access-control-allow-methods', 'access-control-allow-headers', 'access-control-expose-headers', 'access-control-max-age']
+        const serverNames = ['server', 'x-powered-by', 'via', 'x-request-id', 'x-runtime']
+
+        const headers: Record<string, { value: string; category: string }> = {}
+        const securityHeaders: string[] = []
+        const cachingHeaders: string[] = []
+
+        resp.headers.forEach((value, name) => {
+          const lower = name.toLowerCase()
+          let category = 'custom'
+          if (securityNames.includes(lower)) { category = 'security'; securityHeaders.push(lower) }
+          else if (cachingNames.includes(lower)) { category = 'caching'; cachingHeaders.push(lower) }
+          else if (corsNames.includes(lower)) category = 'cors'
+          else if (serverNames.includes(lower)) category = 'server'
+          else if (lower.startsWith('content-')) category = 'content'
+          headers[name] = { value, category }
+        })
+
+        return withJson({
+          url: normalized,
+          headers,
+          header_count: Object.keys(headers).length,
+          security_headers: securityHeaders,
+          caching_headers: cachingHeaders,
+          status_code: resp.status,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to inspect headers'
         return withJson({ error: message }, { status: 502 })
       }
     }
