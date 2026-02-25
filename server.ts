@@ -1044,6 +1044,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/dns-ns?url=https://example.com'</pre>
       <p><strong>AAAA Record Checker:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/dns-aaaa?url=https://example.com'</pre>
+      <p><strong>SOA Record Analyzer:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/dns-soa?url=https://example.com'</pre>
+      <p><strong>PTR Reverse Lookup:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/dns-ptr?ip=8.8.8.8'</pre>
+      <p><strong>TLSA/DANE Record Checker:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/dns-tlsa?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1957,6 +1963,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-spf?url=URL</h3><p class="desc">SPF record analyzer — parses DNS SPF records to show email sender authorization mechanisms including include, a, mx, ip4, ip6, all, redirect, exists, and ptr.</p><pre>curl -s \'http://147.93.131.124/api/dns-spf?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-spf?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-ns?url=URL</h3><p class="desc">NS record checker — queries authoritative nameservers for a domain via DNS NS record lookup.</p><pre>curl -s \'http://147.93.131.124/api/dns-ns?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-ns?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-aaaa?url=URL</h3><p class="desc">AAAA record checker — resolves IPv6 AAAA records for a domain to show IPv6 connectivity.</p><pre>curl -s \'http://147.93.131.124/api/dns-aaaa?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-aaaa?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-soa?url=URL</h3><p class="desc">SOA record analyzer — parses DNS SOA records for zone authority info including primary nameserver, admin email, serial number, refresh/retry/expire timers, and minimum TTL.</p><pre>curl -s \'http://147.93.131.124/api/dns-soa?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-soa?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-ptr?ip=IP</h3><p class="desc">PTR reverse lookup — performs reverse DNS lookup on an IPv4 address to find associated hostnames via in-addr.arpa PTR records.</p><pre>curl -s \'http://147.93.131.124/api/dns-ptr?ip=8.8.8.8\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-ptr?ip=8.8.8.8\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-tlsa?url=URL</h3><p class="desc">TLSA/DANE record checker — queries DNS TLSA records for _443._tcp subdomain to check DANE certificate pinning with usage, selector, matching type, and certificate data.</p><pre>curl -s \'http://147.93.131.124/api/dns-tlsa?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-tlsa?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -5439,6 +5448,9 @@ const server = Bun.serve({
       addPath('/api/dns-spf', 'get', 'SPF record analyzer', [urlParam, optKey])
       addPath('/api/dns-ns', 'get', 'NS record checker', [urlParam, optKey])
       addPath('/api/dns-aaaa', 'get', 'AAAA record checker', [urlParam, optKey])
+      addPath('/api/dns-soa', 'get', 'DNS SOA record analyzer', [urlParam, optKey])
+      addPath('/api/dns-ptr', 'get', 'DNS PTR reverse lookup', [{ name: 'ip', in_: 'query', required: true, schema: { type: 'string' } }, optKey])
+      addPath('/api/dns-tlsa', 'get', 'DNS TLSA/DANE record checker', [urlParam, optKey])
 
       return withJson(spec)
     }
@@ -6646,6 +6658,197 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to check DNS AAAA records'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- DNS SOA Record Analyzer ---
+    if (path === '/api/dns-soa') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'dns-soa')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const domain = new URL(normalized).hostname
+
+        const dohUrl = 'https://cloudflare-dns.com/dns-query?name=' + encodeURIComponent(domain) + '&type=SOA'
+        const dohResp = await fetch(dohUrl, {
+          headers: { Accept: 'application/dns-json' },
+          signal: AbortSignal.timeout(10000),
+        })
+        const dohData = await dohResp.json() as { Answer?: Array<{ type: number; data: string }> }
+
+        let hasSoa = false
+        let primaryNs = ''
+        let adminEmail = ''
+        let serial = 0
+        let refresh = 0
+        let retry = 0
+        let expire = 0
+        let minimumTtl = 0
+
+        if (dohData.Answer) {
+          for (const ans of dohData.Answer) {
+            if (ans.type === 6) {
+              hasSoa = true
+              const parts = ans.data.split(/\s+/)
+              if (parts.length >= 7) {
+                primaryNs = parts[0].replace(/\.$/, '')
+                adminEmail = parts[1].replace(/\.$/, '').replace(/\./, '@')
+                serial = parseInt(parts[2], 10) || 0
+                refresh = parseInt(parts[3], 10) || 0
+                retry = parseInt(parts[4], 10) || 0
+                expire = parseInt(parts[5], 10) || 0
+                minimumTtl = parseInt(parts[6], 10) || 0
+              }
+              break
+            }
+          }
+        }
+
+        return withJson({
+          url: normalized,
+          domain,
+          has_soa: hasSoa,
+          primary_ns: primaryNs,
+          admin_email: adminEmail,
+          serial,
+          refresh,
+          retry,
+          expire,
+          minimum_ttl: minimumTtl,
+          score: hasSoa ? 100 : 0,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check DNS SOA records'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- DNS PTR Reverse Lookup ---
+    if (path === '/api/dns-ptr') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const ip = url.searchParams.get('ip')
+      if (!ip) {
+        return withJson({ error: 'ip parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'dns-ptr')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const octets = ip.trim().split('.')
+        if (octets.length !== 4 || octets.some(o => isNaN(Number(o)) || Number(o) < 0 || Number(o) > 255)) {
+          return withJson({ error: 'Invalid IPv4 address' }, { status: 400 })
+        }
+        const arpaName = octets.reverse().join('.') + '.in-addr.arpa'
+
+        const dohUrl = 'https://cloudflare-dns.com/dns-query?name=' + encodeURIComponent(arpaName) + '&type=PTR'
+        const dohResp = await fetch(dohUrl, {
+          headers: { Accept: 'application/dns-json' },
+          signal: AbortSignal.timeout(10000),
+        })
+        const dohData = await dohResp.json() as { Answer?: Array<{ type: number; data: string }> }
+
+        const ptrRecords: string[] = []
+        if (dohData.Answer) {
+          for (const ans of dohData.Answer) {
+            if (ans.type === 12) {
+              ptrRecords.push(ans.data.replace(/\.$/, ''))
+            }
+          }
+        }
+
+        return withJson({
+          ip: ip.trim(),
+          has_ptr: ptrRecords.length > 0,
+          ptr_records: ptrRecords,
+          total: ptrRecords.length,
+          score: ptrRecords.length > 0 ? 100 : 0,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to perform reverse DNS lookup'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- DNS TLSA/DANE Record Checker ---
+    if (path === '/api/dns-tlsa') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'dns-tlsa')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const domain = new URL(normalized).hostname
+
+        const tlsaName = '_443._tcp.' + domain
+        const dohUrl = 'https://cloudflare-dns.com/dns-query?name=' + encodeURIComponent(tlsaName) + '&type=TLSA'
+        const dohResp = await fetch(dohUrl, {
+          headers: { Accept: 'application/dns-json' },
+          signal: AbortSignal.timeout(10000),
+        })
+        const dohData = await dohResp.json() as { Answer?: Array<{ type: number; data: string }> }
+
+        const records: Array<{ usage: number; selector: number; matching_type: number; certificate_data: string }> = []
+        if (dohData.Answer) {
+          for (const ans of dohData.Answer) {
+            if (ans.type === 52) {
+              const parts = ans.data.split(/\s+/)
+              if (parts.length >= 4) {
+                records.push({
+                  usage: parseInt(parts[0], 10),
+                  selector: parseInt(parts[1], 10),
+                  matching_type: parseInt(parts[2], 10),
+                  certificate_data: parts.slice(3).join(''),
+                })
+              }
+            }
+          }
+        }
+
+        return withJson({
+          url: normalized,
+          domain,
+          has_tlsa: records.length > 0,
+          records,
+          total: records.length,
+          score: records.length > 0 ? 100 : 50,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check DNS TLSA records'
         return withJson({ error: message }, { status: 502 })
       }
     }
