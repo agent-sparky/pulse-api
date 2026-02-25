@@ -984,6 +984,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/http-methods?url=https://example.com'</pre>
       <p><strong>Server Banner Analyzer:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/server-banner?url=https://example.com'</pre>
+      <p><strong>Email Harvester:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/emails?url=https://example.com'</pre>
+      <p><strong>Port Scanner Lite:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/open-ports?url=https://example.com'</pre>
+      <p><strong>DNS Record Diff:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/dns-diff?url1=https://example.com&url2=https://google.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1867,6 +1873,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/subdomains?url=URL</h3><p class="desc">Subdomain enumerator — checks 20 common subdomain prefixes via DNS resolution and returns live subdomains with IP addresses.</p><pre>curl -s \'http://147.93.131.124/api/subdomains?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/subdomains?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/http-methods?url=URL</h3><p class="desc">HTTP method tester — sends OPTIONS request and tests HEAD, PUT, DELETE, PATCH methods. Identifies risky methods enabled on the server.</p><pre>curl -s \'http://147.93.131.124/api/http-methods?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/http-methods?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/server-banner?url=URL</h3><p class="desc">Server banner analyzer — extracts and analyzes the Server response header for version disclosure risks and software identification.</p><pre>curl -s \'http://147.93.131.124/api/server-banner?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/server-banner?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/emails?url=URL</h3><p class="desc">Email harvester — extracts email addresses from page HTML and mailto links. Returns deduplicated email list with count.</p><pre>curl -s \'http://147.93.131.124/api/emails?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/emails?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/open-ports?url=URL</h3><p class="desc">Port scanner lite — tests common HTTP/HTTPS ports (80, 443, 8080, 8443, 3000, 5000, 9090) for TCP connectivity.</p><pre>curl -s \'http://147.93.131.124/api/open-ports?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/open-ports?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-diff?url1=URL1&url2=URL2</h3><p class="desc">DNS record diff — compares A, AAAA, MX, NS, and TXT records between two domains side by side and flags differences.</p><pre>curl -s \'http://147.93.131.124/api/dns-diff?url1=https://example.com&url2=https://google.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-diff?url1=https://example.com&url2=https://google.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -4602,6 +4611,176 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to analyze server banner'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/emails') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'emails')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow' })
+        const html = await resp.text()
+
+        const emailRegex = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g
+        const bodyEmails = html.match(emailRegex) || []
+
+        const mailtoRegex = /href\s*=\s*["']mailto:([^"'?]+)/gi
+        const mailtoEmails: string[] = []
+        let m: RegExpExecArray | null
+        while ((m = mailtoRegex.exec(html)) !== null) {
+          mailtoEmails.push(m[1])
+        }
+
+        const allEmails = [...new Set([...bodyEmails, ...mailtoEmails])]
+
+        let score = 0
+        if (allEmails.length > 0) score = 50
+        if (allEmails.length >= 3) score = 75
+        if (allEmails.length >= 10) score = 100
+
+        return withJson({
+          url: normalized,
+          emails_found: allEmails,
+          count: allEmails.length,
+          source: 'html+mailto',
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to extract emails'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/open-ports') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'open-ports')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const hostname = new URL(normalized).hostname
+        const portsToCheck = [80, 443, 8080, 8443, 3000, 5000, 9090]
+        const openPorts: Array<{ port: number; status: string }> = []
+        const closedPorts: number[] = []
+
+        for (const port of portsToCheck) {
+          try {
+            await new Promise<void>((resolve, reject) => {
+              const net = require('node:net')
+              const sock = net.createConnection({ host: hostname, port, timeout: 3000 }, () => {
+                sock.destroy()
+                resolve()
+              })
+              sock.on('timeout', () => { sock.destroy(); reject(new Error('timeout')) })
+              sock.on('error', (err: Error) => { reject(err) })
+            })
+            openPorts.push({ port, status: 'open' })
+          } catch {
+            closedPorts.push(port)
+          }
+        }
+
+        let score = 0
+        if (openPorts.length > 0) score = Math.min(100, openPorts.length * 35)
+
+        return withJson({
+          url: normalized,
+          host: hostname,
+          ports_checked: portsToCheck.length,
+          open_ports: openPorts,
+          closed_ports: closedPorts,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to scan ports'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/dns-diff') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target1 = url.searchParams.get('url1')
+      const target2 = url.searchParams.get('url2')
+      if (!target1 || !target2) {
+        return withJson({ error: 'url1 and url2 parameters required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'dns-diff')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized1 = normalizeUrl(target1)
+        const normalized2 = normalizeUrl(target2)
+        const domain1 = new URL(normalized1).hostname
+        const domain2 = new URL(normalized2).hostname
+
+        const resolver = new Resolver()
+        const recordTypes = ['A', 'AAAA', 'MX', 'NS', 'TXT'] as const
+        const records: Record<string, { domain1: any; domain2: any; match: boolean }> = {}
+        let matching = 0
+
+        for (const rtype of recordTypes) {
+          let r1: any = []
+          let r2: any = []
+          try { r1 = await resolver.resolve(domain1, rtype) } catch {}
+          try { r2 = await resolver.resolve(domain2, rtype) } catch {}
+
+          const s1 = JSON.stringify(Array.isArray(r1) ? r1.sort() : r1)
+          const s2 = JSON.stringify(Array.isArray(r2) ? r2.sort() : r2)
+          const match = s1 === s2
+          if (match) matching++
+
+          records[rtype] = { domain1: r1, domain2: r2, match }
+        }
+
+        const total = recordTypes.length
+        const score = Math.round((matching / total) * 100)
+
+        return withJson({
+          domain1,
+          domain2,
+          records,
+          total_record_types: total,
+          matching,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to compare DNS records'
         return withJson({ error: message }, { status: 502 })
       }
     }
