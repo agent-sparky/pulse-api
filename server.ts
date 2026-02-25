@@ -1038,6 +1038,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/http3?url=https://example.com'</pre>
       <p><strong>DMARC Record Analyzer:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/dns-dmarc?url=https://example.com'</pre>
+      <p><strong>SPF Record Analyzer:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/dns-spf?url=https://example.com'</pre>
+      <p><strong>NS Record Checker:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/dns-ns?url=https://example.com'</pre>
+      <p><strong>AAAA Record Checker:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/dns-aaaa?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1948,6 +1954,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/ct-logs?url=URL</h3><p class="desc">CT log checker — queries Certificate Transparency logs via crt.sh for a domain, returning issued certificates with issuer, validity dates, and serial numbers.</p><pre>curl -s \'http://147.93.131.124/api/ct-logs?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/ct-logs?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/http3?url=URL</h3><p class="desc">HTTP/3 detector — checks for Alt-Svc response header to detect HTTP/3 (QUIC) protocol support.</p><pre>curl -s \'http://147.93.131.124/api/http3?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/http3?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-dmarc?url=URL</h3><p class="desc">DMARC record analyzer — queries DNS TXT records for _dmarc subdomain and parses DMARC policy tags including v, p, rua, ruf, sp, adkim, aspf, pct, and fo.</p><pre>curl -s \'http://147.93.131.124/api/dns-dmarc?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-dmarc?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-spf?url=URL</h3><p class="desc">SPF record analyzer — parses DNS SPF records to show email sender authorization mechanisms including include, a, mx, ip4, ip6, all, redirect, exists, and ptr.</p><pre>curl -s \'http://147.93.131.124/api/dns-spf?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-spf?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-ns?url=URL</h3><p class="desc">NS record checker — queries authoritative nameservers for a domain via DNS NS record lookup.</p><pre>curl -s \'http://147.93.131.124/api/dns-ns?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-ns?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-aaaa?url=URL</h3><p class="desc">AAAA record checker — resolves IPv6 AAAA records for a domain to show IPv6 connectivity.</p><pre>curl -s \'http://147.93.131.124/api/dns-aaaa?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-aaaa?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -5427,6 +5436,9 @@ const server = Bun.serve({
       addPath('/api/ct-logs', 'get', 'Certificate Transparency log checker', [urlParam, optKey])
       addPath('/api/http3', 'get', 'HTTP/3 Alt-Svc detector', [urlParam, optKey])
       addPath('/api/dns-dmarc', 'get', 'DMARC record analyzer', [urlParam, optKey])
+      addPath('/api/dns-spf', 'get', 'SPF record analyzer', [urlParam, optKey])
+      addPath('/api/dns-ns', 'get', 'NS record checker', [urlParam, optKey])
+      addPath('/api/dns-aaaa', 'get', 'AAAA record checker', [urlParam, optKey])
 
       return withJson(spec)
     }
@@ -6436,6 +6448,204 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to check DNS MX records'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- DNS SPF Record Analyzer ---
+    if (path === '/api/dns-spf') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'dns-spf')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const domain = new URL(normalized).hostname
+
+        const dohUrl = 'https://cloudflare-dns.com/dns-query?name=' + encodeURIComponent(domain) + '&type=TXT'
+        const dohResp = await fetch(dohUrl, {
+          headers: { Accept: 'application/dns-json' },
+          signal: AbortSignal.timeout(10000),
+        })
+        const dohData = await dohResp.json() as { Answer?: Array<{ type: number; data: string }> }
+
+        let record = ''
+        if (dohData.Answer) {
+          for (const ans of dohData.Answer) {
+            if (ans.type === 16) {
+              const txt = ans.data.replace(/^"|"$/g, '').replace(/"\s*"/g, '')
+              if (txt.startsWith('v=spf1')) {
+                record = txt
+                break
+              }
+            }
+          }
+        }
+
+        const hasSpf = record.length > 0
+        const mechanisms: Array<{ type: string; value: string }> = []
+        let allPolicy: string | null = null
+
+        if (hasSpf) {
+          const parts = record.split(/\s+/)
+          for (const part of parts) {
+            if (part === 'v=spf1') continue
+            const match = part.match(/^([+\-~?]?)(.+)$/)
+            if (!match) continue
+            const qualifier = match[1] || '+'
+            const mechanism = match[2]
+
+            if (mechanism.startsWith('include:')) {
+              mechanisms.push({ type: 'include', value: mechanism.slice(8) })
+            } else if (mechanism.startsWith('a:') || mechanism === 'a') {
+              mechanisms.push({ type: 'a', value: mechanism === 'a' ? domain : mechanism.slice(2) })
+            } else if (mechanism.startsWith('mx:') || mechanism === 'mx') {
+              mechanisms.push({ type: 'mx', value: mechanism === 'mx' ? domain : mechanism.slice(3) })
+            } else if (mechanism.startsWith('ip4:')) {
+              mechanisms.push({ type: 'ip4', value: mechanism.slice(4) })
+            } else if (mechanism.startsWith('ip6:')) {
+              mechanisms.push({ type: 'ip6', value: mechanism.slice(4) })
+            } else if (mechanism.startsWith('redirect=')) {
+              mechanisms.push({ type: 'redirect', value: mechanism.slice(9) })
+            } else if (mechanism.startsWith('exists:')) {
+              mechanisms.push({ type: 'exists', value: mechanism.slice(7) })
+            } else if (mechanism === 'ptr' || mechanism.startsWith('ptr:')) {
+              mechanisms.push({ type: 'ptr', value: mechanism === 'ptr' ? domain : mechanism.slice(4) })
+            } else if (mechanism === 'all') {
+              allPolicy = qualifier + 'all'
+            }
+          }
+        }
+
+        return withJson({
+          url: normalized,
+          domain,
+          has_spf: hasSpf,
+          record: record || null,
+          mechanisms,
+          all_policy: allPolicy,
+          score: hasSpf ? 100 : 0,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check SPF records'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- DNS NS Record Checker ---
+    if (path === '/api/dns-ns') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'dns-ns')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const domain = new URL(normalized).hostname
+
+        const dohUrl = 'https://cloudflare-dns.com/dns-query?name=' + encodeURIComponent(domain) + '&type=NS'
+        const dohResp = await fetch(dohUrl, {
+          headers: { Accept: 'application/dns-json' },
+          signal: AbortSignal.timeout(10000),
+        })
+        const dohData = await dohResp.json() as { Answer?: Array<{ type: number; data: string }> }
+
+        const nameservers: string[] = []
+        if (dohData.Answer) {
+          for (const ans of dohData.Answer) {
+            if (ans.type === 2) {
+              nameservers.push(ans.data.replace(/\.$/, ''))
+            }
+          }
+        }
+
+        nameservers.sort()
+
+        return withJson({
+          url: normalized,
+          domain,
+          nameservers,
+          has_ns: nameservers.length > 0,
+          total: nameservers.length,
+          score: nameservers.length > 0 ? 100 : 0,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check DNS NS records'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- DNS AAAA Record Checker ---
+    if (path === '/api/dns-aaaa') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'dns-aaaa')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const domain = new URL(normalized).hostname
+
+        const dohUrl = 'https://cloudflare-dns.com/dns-query?name=' + encodeURIComponent(domain) + '&type=AAAA'
+        const dohResp = await fetch(dohUrl, {
+          headers: { Accept: 'application/dns-json' },
+          signal: AbortSignal.timeout(10000),
+        })
+        const dohData = await dohResp.json() as { Answer?: Array<{ type: number; data: string }> }
+
+        const aaaaRecords: string[] = []
+        if (dohData.Answer) {
+          for (const ans of dohData.Answer) {
+            if (ans.type === 28) {
+              aaaaRecords.push(ans.data)
+            }
+          }
+        }
+
+        return withJson({
+          url: normalized,
+          domain,
+          aaaa_records: aaaaRecords,
+          has_ipv6: aaaaRecords.length > 0,
+          total: aaaaRecords.length,
+          score: aaaaRecords.length > 0 ? 100 : 0,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check DNS AAAA records'
         return withJson({ error: message }, { status: 502 })
       }
     }
