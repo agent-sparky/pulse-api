@@ -839,7 +839,7 @@ function landingHtml(): string {
     <header>
       <h1>Pulse — Site Intelligence API</h1>
       <p class="subtitle">Instant website health checks — response time, SSL, headers, redirects, DNS, performance scoring</p>
-      <div style="margin-top:0.8rem"><a href="/dashboard" style="color:var(--accent);font-weight:600;text-decoration:none;border:1px solid var(--accent);border-radius:8px;padding:0.5rem 1rem;display:inline-block">Dashboard &rarr;</a> <a href="/status" style="color:var(--accent);font-weight:600;text-decoration:none;border:1px solid var(--accent);border-radius:8px;padding:0.5rem 1rem;display:inline-block;margin-left:0.5rem">Status &rarr;</a></div>
+      <div style="margin-top:0.8rem"><a href="/dashboard" style="color:var(--accent);font-weight:600;text-decoration:none;border:1px solid var(--accent);border-radius:8px;padding:0.5rem 1rem;display:inline-block">Dashboard &rarr;</a> <a href="/status" style="color:var(--accent);font-weight:600;text-decoration:none;border:1px solid var(--accent);border-radius:8px;padding:0.5rem 1rem;display:inline-block;margin-left:0.5rem">Status &rarr;</a> <a href="/docs" style="color:var(--accent);font-weight:600;text-decoration:none;border:1px solid var(--accent);border-radius:8px;padding:0.5rem 1rem;display:inline-block;margin-left:0.5rem">API Docs &rarr;</a></div>
     </header>
 
     <form id="check-form">
@@ -897,6 +897,11 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/badge/1'
 # Returns SVG image — embed in README:
 # ![Uptime](http://147.93.131.124/api/badge/1)</pre>
+      <p><strong>Compare URLs:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/compare?urls=https://example.com,https://google.com'</pre>
+      <p><strong>Uptime Stats:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/uptime'</pre>
+      <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
     <section class="section">
@@ -1666,6 +1671,99 @@ const server = Bun.serve({
       return withCors(svg, { status: 200, headers: { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'no-cache, max-age=300' } })
     }
 
+    if (path === '/api/compare') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const urlsParam = url.searchParams.get('urls')
+      if (!urlsParam) {
+        return withJson({ error: 'urls parameter required (comma-separated)' }, { status: 400 })
+      }
+
+      const urlList = urlsParam.split(',').map(u => u.trim()).filter(Boolean)
+      if (urlList.length === 0 || urlList.length > 5) {
+        return withJson({ error: 'Provide 1-5 comma-separated URLs' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'compare')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      const comparisons: Array<{ url: string; statusCode: number; responseTimeMs: number; ssl: SslInfo }> = []
+      for (const u of urlList) {
+        const r = await checkUrl(u)
+        comparisons.push({ url: r.url, statusCode: r.statusCode, responseTimeMs: r.responseTimeMs, ssl: r.ssl })
+      }
+
+      let fastest = comparisons[0]?.url || ''
+      let slowest = comparisons[0]?.url || ''
+      for (const c of comparisons) {
+        if (c.responseTimeMs < (comparisons.find(x => x.url === fastest)?.responseTimeMs || Infinity)) fastest = c.url
+        if (c.responseTimeMs > (comparisons.find(x => x.url === slowest)?.responseTimeMs || 0)) slowest = c.url
+      }
+
+      return withJson({ comparisons, fastest, slowest })
+    }
+
+    if (path === '/api/uptime') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const uptimeSeconds = Math.floor(process.uptime())
+      const totalChecks = (db.prepare('SELECT COUNT(*) as c FROM checks').get() as any)?.c || 0
+      const totalMonitors = (db.prepare("SELECT COUNT(*) as c FROM monitors WHERE status='active'").get() as any)?.c || 0
+      const totalUsers = (db.prepare('SELECT COUNT(*) as c FROM api_keys').get() as any)?.c || 0
+      const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+      const checksLast24h = (db.prepare('SELECT COUNT(*) as c FROM checks WHERE created_at >= ?').get(since24h) as any)?.c || 0
+
+      return withJson({
+        server_uptime_seconds: uptimeSeconds,
+        total_checks: totalChecks,
+        total_monitors: totalMonitors,
+        total_users: totalUsers,
+        checks_last_24h: checksLast24h,
+      })
+    }
+
+    if (path === '/docs') {
+      if (request.method !== 'GET') {
+        return withCors('Method Not Allowed', { status: 405 })
+      }
+
+      const docsPage = '<!doctype html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><title>Pulse API Docs</title><style>:root{--bg:#090b10;--panel:#11141d;--text:#f7f9ff;--muted:#9aa4bf;--accent:#39c5ff;--border:#2a3040;--good:#3ddc97;--bad:#ff6378}*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--text);padding:2rem}.wrap{max-width:980px;margin:0 auto}h1{color:var(--accent);margin:0 0 .5rem}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}.nav{display:flex;gap:1rem;align-items:center;margin-bottom:1.5rem}.ep{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:1rem;margin-bottom:1rem}.ep h3{margin:0 0 .3rem;color:var(--accent)}.ep .method{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.8rem;font-weight:700;margin-right:.5rem}.ep .method.get{background:#1a3a4a;color:#39c5ff}.ep .method.post{background:#1a4a2a;color:#3ddc97}.ep .method.delete{background:#4a1a1a;color:#ff6378}.ep .desc{color:var(--muted);margin:.3rem 0}.ep pre{background:#050913;border:1px solid var(--border);border-radius:8px;padding:.6rem;font-size:.82rem;overflow-x:auto;color:#d1dcff;white-space:pre-wrap}.ep .try-btn{background:linear-gradient(120deg,var(--accent),#7ce0ff);color:#071120;border:0;border-radius:8px;padding:.4rem .8rem;cursor:pointer;font-weight:600;font-size:.82rem;margin-top:.4rem}.ep .try-btn:hover{filter:brightness(1.05)}.ep .result{margin-top:.5rem;display:none;background:#050913;border:1px solid var(--border);border-radius:8px;padding:.6rem;font-size:.82rem;white-space:pre-wrap;color:#d1dcff;max-height:300px;overflow-y:auto}</style></head><body><div class="wrap"><div class="nav"><a href="/">&larr; Home</a><a href="/dashboard">Dashboard</a><a href="/status">Status</a><h1>Pulse API Documentation</h1></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/health</h3><p class="desc">Server health check. Returns status and uptime.</p><pre>curl -s http://147.93.131.124/api/health</pre><button class="try-btn" onclick="tryIt(this,\'/api/health\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/check?url=URL</h3><p class="desc">Full URL analysis — response time, status, headers, SSL, redirects.</p><pre>curl -s \'http://147.93.131.124/api/check?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/check?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/dns?domain=DOMAIN</h3><p class="desc">DNS record analysis — A, MX, TXT, NS, CNAME records.</p><pre>curl -s \'http://147.93.131.124/api/dns?domain=example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns?domain=example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/perf?url=URL</h3><p class="desc">Performance scoring — TTFB, total time, size, compression, score.</p><pre>curl -s \'http://147.93.131.124/api/perf?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/perf?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/seo?url=URL</h3><p class="desc">SEO audit — title, description, h1 count, images without alt, canonical, robots, score.</p><pre>curl -s \'http://147.93.131.124/api/seo?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/seo?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/compare?urls=URL1,URL2</h3><p class="desc">Side-by-side URL comparison — checks up to 5 URLs, returns fastest/slowest.</p><pre>curl -s \'http://147.93.131.124/api/compare?urls=https://example.com,https://google.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/compare?urls=https://example.com,https://google.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/uptime</h3><p class="desc">Global uptime statistics — server uptime, total checks, monitors, users, checks in last 24h.</p><pre>curl -s http://147.93.131.124/api/uptime</pre><button class="try-btn" onclick="tryIt(this,\'/api/uptime\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
+        + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
+        + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/account</h3><p class="desc">Account info — email, tier, checks today, limit. Requires X-API-Key header.</p><pre>curl -s http://147.93.131.124/api/account -H \'X-API-Key: YOUR_KEY\'</pre></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/history</h3><p class="desc">Last 50 checks for authenticated user. Requires X-API-Key header.</p><pre>curl -s http://147.93.131.124/api/history -H \'X-API-Key: YOUR_KEY\'</pre></div>'
+        + '<div class="ep"><h3><span class="method post">POST</span>/api/subscribe</h3><p class="desc">Create Stripe checkout session for Pro tier ($9/month).</p><pre>curl -s -X POST \'http://147.93.131.124/api/subscribe\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/monitors</h3><p class="desc">List active monitors. Requires X-API-Key header.</p><pre>curl -s http://147.93.131.124/api/monitors -H \'X-API-Key: YOUR_KEY\'</pre></div>'
+        + '<div class="ep"><h3><span class="method post">POST</span>/api/monitors</h3><p class="desc">Create a monitor (Pro tier). Requires X-API-Key header.</p><pre>curl -s -X POST http://147.93.131.124/api/monitors \\\n  -H \'X-API-Key: YOUR_KEY\' -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://example.com","interval_minutes":5,"alert_url":"https://webhook.site/test"}\'</pre></div>'
+        + '<div class="ep"><h3><span class="method delete">DELETE</span>/api/monitors/:id</h3><p class="desc">Delete a monitor. Requires X-API-Key header.</p><pre>curl -s -X DELETE http://147.93.131.124/api/monitors/1 -H \'X-API-Key: YOUR_KEY\'</pre></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/monitors/:id/checks</h3><p class="desc">Last 100 checks for a specific monitor. Requires X-API-Key header.</p><pre>curl -s http://147.93.131.124/api/monitors/1/checks -H \'X-API-Key: YOUR_KEY\'</pre></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/badge/:id</h3><p class="desc">SVG uptime badge for a monitor — embed in README.</p><pre>curl -s http://147.93.131.124/api/badge/1\n# Embed: ![Uptime](http://147.93.131.124/api/badge/1)</pre><button class="try-btn" onclick="tryBadge(this,\'/api/badge/1\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method post">POST</span>/api/webhooks/stripe</h3><p class="desc">Stripe webhook handler for checkout.session.completed and subscription.deleted events.</p><pre># Handled automatically by Stripe</pre></div>'
+        + '<script>function tryIt(btn,ep){var r=btn.nextElementSibling;r.style.display="block";r.textContent="Loading...";fetch(ep).then(function(res){return res.json()}).then(function(d){r.textContent=JSON.stringify(d,null,2)}).catch(function(e){r.textContent="Error: "+e.message})}function tryBadge(btn,ep){var r=btn.nextElementSibling;r.style.display="block";r.innerHTML="<img src=\\""+ep+"\\" alt=\\"badge\\"/>"}</script>'
+        + '</div></body></html>'
+
+      return withCors(docsPage, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=300' },
+      })
+    }
+
     return withCors('Not Found', { status: 404 })
   },
 })
@@ -1733,6 +1831,35 @@ setInterval(async () => {
     }
   }
 }, 60000)
+
+function sendDailyReport(email: string, monitors: Array<{ id: number; url: string; last_status_code: number | null }>): void {
+  const lines = ['Pulse Daily Report — ' + new Date().toISOString().slice(0, 10), '']
+  for (const m of monitors) {
+    const status = m.last_status_code === 200 ? 'UP' : m.last_status_code ? 'DOWN (' + m.last_status_code + ')' : 'PENDING'
+    lines.push('Monitor #' + m.id + ' — ' + m.url + ' — ' + status)
+  }
+  lines.push('', 'View dashboard: http://147.93.131.124/dashboard')
+  const body = lines.join('\n')
+  const subject = '[Pulse] Daily Report — ' + monitors.length + ' monitors'
+  sendAlertEmail(email, subject, body).catch(() => {})
+}
+
+setInterval(() => {
+  const allMonitors = db.prepare("SELECT id, api_key, url, last_status_code, alert_url FROM monitors WHERE status = 'active'").all() as Array<{ id: number; api_key: string; url: string; last_status_code: number | null; alert_url: string | null }>
+  const byKey: Record<string, Array<{ id: number; url: string; last_status_code: number | null; email: string }>> = {}
+  for (const m of allMonitors) {
+    if (!m.alert_url || !m.alert_url.startsWith('mailto:')) continue
+    const email = m.alert_url.slice(7)
+    if (!byKey[email]) byKey[email] = []
+    byKey[email].push({ id: m.id, url: m.url, last_status_code: m.last_status_code })
+  }
+  let count = 0
+  for (const [email, monitors] of Object.entries(byKey)) {
+    sendDailyReport(email, monitors)
+    count++
+  }
+  console.log('[report] Sent daily reports to ' + count + ' users')
+}, 24 * 60 * 60 * 1000)
 
 console.log(`Pulse — Site Intelligence API running on http://localhost:${PORT}`)
 console.log(`Port open in server: ${server.port}`)
