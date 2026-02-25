@@ -990,6 +990,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/open-ports?url=https://example.com'</pre>
       <p><strong>DNS Record Diff:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/dns-diff?url1=https://example.com&url2=https://google.com'</pre>
+      <p><strong>Email Obfuscation Detector:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/email-obfuscation?url=https://example.com'</pre>
+      <p><strong>Header Timeline:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/header-timeline?url=https://example.com'</pre>
+      <p><strong>Domain Age Checker:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/domain-age?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1876,6 +1882,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/emails?url=URL</h3><p class="desc">Email harvester — extracts email addresses from page HTML and mailto links. Returns deduplicated email list with count.</p><pre>curl -s \'http://147.93.131.124/api/emails?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/emails?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/open-ports?url=URL</h3><p class="desc">Port scanner lite — tests common HTTP/HTTPS ports (80, 443, 8080, 8443, 3000, 5000, 9090) for TCP connectivity.</p><pre>curl -s \'http://147.93.131.124/api/open-ports?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/open-ports?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-diff?url1=URL1&url2=URL2</h3><p class="desc">DNS record diff — compares A, AAAA, MX, NS, and TXT records between two domains side by side and flags differences.</p><pre>curl -s \'http://147.93.131.124/api/dns-diff?url1=https://example.com&url2=https://google.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-diff?url1=https://example.com&url2=https://google.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/email-obfuscation?url=URL</h3><p class="desc">Email obfuscation detector — scans page HTML for JavaScript-encoded, CSS-hidden, base64, hex-encoded, and HTML entity-encoded email addresses.</p><pre>curl -s \'http://147.93.131.124/api/email-obfuscation?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/email-obfuscation?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/header-timeline?url=URL</h3><p class="desc">Header timeline — fetches a URL twice with 1-second delay and compares response headers to identify dynamic vs stable headers.</p><pre>curl -s \'http://147.93.131.124/api/header-timeline?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/header-timeline?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/domain-age?url=URL</h3><p class="desc">Domain age checker — computes domain age from WHOIS creation date and returns registration timeline in years, months, and days.</p><pre>curl -s \'http://147.93.131.124/api/domain-age?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/domain-age?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -4781,6 +4790,262 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to compare DNS records'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- Email Obfuscation Detector ---
+    if (path === '/api/email-obfuscation') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'email-obfuscation')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow', headers: { 'User-Agent': 'PulseBot/1.0' } })
+        const html = await resp.text()
+
+        const techniques: Array<{ technique: string; evidence: string }> = []
+
+        // JavaScript-encoded emails: String.fromCharCode patterns
+        const charCodeMatches = html.match(/String\.fromCharCode\s*\([0-9,\s]+\)/gi) || []
+        for (const m of charCodeMatches) {
+          try {
+            const nums = m.match(/\d+/g)?.map(Number) || []
+            const decoded = String.fromCharCode(...nums)
+            if (decoded.includes('@')) {
+              techniques.push({ technique: 'javascript_charcode', evidence: decoded.trim() })
+            }
+          } catch {}
+        }
+
+        // Base64-encoded emails: atob('...') patterns
+        const atobMatches = html.match(/atob\s*\(\s*['"][A-Za-z0-9+/=]+['"]\s*\)/gi) || []
+        for (const m of atobMatches) {
+          try {
+            const b64 = m.match(/['"]([A-Za-z0-9+/=]+)['"]/)?.[1]
+            if (b64) {
+              const decoded = atob(b64)
+              if (decoded.includes('@')) {
+                techniques.push({ technique: 'javascript_base64', evidence: decoded.trim() })
+              }
+            }
+          } catch {}
+        }
+
+        // Hex-encoded strings containing @
+        const hexMatches = html.match(/\\x[0-9a-fA-F]{2}(?:\\x[0-9a-fA-F]{2}){3,}/g) || []
+        for (const m of hexMatches) {
+          try {
+            const decoded = m.replace(/\\x([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+            if (decoded.includes('@')) {
+              techniques.push({ technique: 'hex_encoded', evidence: decoded.trim() })
+            }
+          } catch {}
+        }
+
+        // CSS-hidden emails: display:none or visibility:hidden near @ symbols
+        const hiddenBlocks = html.match(/<[^>]+(display\s*:\s*none|visibility\s*:\s*hidden)[^>]*>[^<]*@[^<]*<\/[^>]+>/gi) || []
+        for (const m of hiddenBlocks) {
+          const emailMatch = m.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/)?.[0]
+          if (emailMatch) {
+            techniques.push({ technique: 'css_hidden', evidence: emailMatch })
+          }
+        }
+
+        // HTML entity-encoded emails: &#64; for @ , &#46; for .
+        const entityPattern = /[a-zA-Z0-9._%+-]*(?:&#(?:64|x40);)[a-zA-Z0-9._%+-]*(?:&#(?:46|x2[eE]);)[a-zA-Z]{2,}/g
+        const entityMatches = html.match(entityPattern) || []
+        for (const m of entityMatches) {
+          const decoded = m.replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n)))
+            .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+          techniques.push({ technique: 'html_entity_encoded', evidence: decoded })
+        }
+
+        // data-email or data-user/data-domain attributes
+        const dataEmailMatches = html.match(/data-email\s*=\s*["'][^"']+["']/gi) || []
+        for (const m of dataEmailMatches) {
+          const val = m.match(/["']([^"']+)["']/)?.[1]
+          if (val) techniques.push({ technique: 'data_attribute', evidence: val })
+        }
+
+        const count = techniques.length
+        const hasObfuscation = count > 0
+        const score = hasObfuscation ? Math.min(count * 25, 100) : 0
+
+        return withJson({
+          url: normalized,
+          techniques_found: techniques,
+          count,
+          has_obfuscation: hasObfuscation,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to detect email obfuscation'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- Header Timeline ---
+    if (path === '/api/header-timeline') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'header-timeline')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+
+        const resp1 = await fetch(normalized, { redirect: 'follow', headers: { 'User-Agent': 'PulseBot/1.0' } })
+        const headers1: Record<string, string> = {}
+        resp1.headers.forEach((v, k) => { headers1[k] = v })
+
+        await new Promise(resolve => setTimeout(resolve, 1000))
+
+        const resp2 = await fetch(normalized, { redirect: 'follow', headers: { 'User-Agent': 'PulseBot/1.0' } })
+        const headers2: Record<string, string> = {}
+        resp2.headers.forEach((v, k) => { headers2[k] = v })
+
+        const allKeys = new Set([...Object.keys(headers1), ...Object.keys(headers2)])
+        const changedHeaders: string[] = []
+        const stableHeaders: string[] = []
+
+        for (const key of allKeys) {
+          if (headers1[key] !== headers2[key]) {
+            changedHeaders.push(key)
+          } else {
+            stableHeaders.push(key)
+          }
+        }
+
+        const total = allKeys.size
+        const stableCount = stableHeaders.length
+        const stabilityScore = total > 0 ? Math.round((stableCount / total) * 100) : 100
+
+        return withJson({
+          url: normalized,
+          fetch_count: 2,
+          headers_first: headers1,
+          headers_second: headers2,
+          changed_headers: changedHeaders.sort(),
+          stable_headers: stableHeaders.sort(),
+          stability_score: stabilityScore,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to track header timeline'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- Domain Age Checker ---
+    if (path === '/api/domain-age') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'domain-age')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const domain = new URL(normalized).hostname
+
+        const proc = Bun.spawn(['whois', domain], { stdout: 'pipe', stderr: 'pipe' })
+        const output = await new Response(proc.stdout).text()
+        await proc.exited
+
+        let creationDate: string | null = null
+        let registrar: string | null = null
+        let expiryDate: string | null = null
+
+        for (const line of output.split('\n')) {
+          const lower = line.toLowerCase().trim()
+          if (!creationDate && (lower.startsWith('creation date:') || lower.startsWith('created:') || lower.startsWith('created on:') || lower.startsWith('registration date:') || lower.startsWith('registered on:'))) {
+            creationDate = line.split(':').slice(1).join(':').trim()
+          }
+          if (!registrar && (lower.startsWith('registrar:') || lower.startsWith('registrar name:'))) {
+            registrar = line.split(':').slice(1).join(':').trim()
+          }
+          if (!expiryDate && (lower.startsWith('registry expiry date:') || lower.startsWith('expiry date:') || lower.startsWith('expires:') || lower.startsWith('expires on:') || lower.startsWith('paid-till:'))) {
+            expiryDate = line.split(':').slice(1).join(':').trim()
+          }
+        }
+
+        if (!creationDate) {
+          return withJson({
+            url: normalized,
+            domain,
+            creation_date: null,
+            expiry_date: expiryDate || null,
+            age_years: null,
+            age_months: null,
+            age_days: null,
+            registrar: registrar || null,
+            score: 0,
+            error: 'Could not parse creation date from WHOIS',
+          })
+        }
+
+        const created = new Date(creationDate)
+        const now = new Date()
+        const diffMs = now.getTime() - created.getTime()
+        const ageDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+        const ageMonths = Math.floor(ageDays / 30.44)
+        const ageYears = Math.floor(ageDays / 365.25)
+
+        // Score: older domains are more trustworthy
+        let score = 0
+        if (ageYears >= 10) score = 100
+        else if (ageYears >= 5) score = 80
+        else if (ageYears >= 2) score = 60
+        else if (ageYears >= 1) score = 40
+        else score = 20
+
+        return withJson({
+          url: normalized,
+          domain,
+          creation_date: created.toISOString().slice(0, 10),
+          expiry_date: expiryDate || null,
+          age_years: ageYears,
+          age_months: ageMonths,
+          age_days: ageDays,
+          registrar: registrar || null,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check domain age'
         return withJson({ error: message }, { status: 502 })
       }
     }
