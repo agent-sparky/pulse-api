@@ -936,6 +936,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/structured-data?url=https://example.com'</pre>
       <p><strong>DNS Blacklist Lookup:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/dnsbl?url=https://example.com'</pre>
+      <p><strong>Open Graph Image Preview:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/og-image?url=https://example.com'</pre>
+      <p><strong>HTML Validator:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/html-validate?url=https://example.com'</pre>
+      <p><strong>Favicon Checker:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/favicon?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1795,6 +1801,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/http2?url=URL</h3><p class="desc">HTTP/2 checker — detects HTTP/2 and HTTP/3 protocol support, reports alt-svc header for QUIC/H3 advertisement.</p><pre>curl -s \'http://147.93.131.124/api/http2?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/http2?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/structured-data?url=URL</h3><p class="desc">Structured data validator — extracts JSON-LD blocks and counts Microdata itemscope attributes. Reports @type and @context for each JSON-LD entry.</p><pre>curl -s \'http://147.93.131.124/api/structured-data?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/structured-data?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/dnsbl?url=URL</h3><p class="desc">DNS blacklist lookup — resolves domain IP and checks against Spamhaus, SpamCop, and Barracuda blacklists for spam reputation.</p><pre>curl -s \'http://147.93.131.124/api/dnsbl?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dnsbl?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/og-image?url=URL</h3><p class="desc">Open Graph image preview — extracts og:image, og:title, og:description, og:type, and og:site_name meta tags from any page.</p><pre>curl -s \'http://147.93.131.124/api/og-image?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/og-image?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/html-validate?url=URL</h3><p class="desc">HTML validator — checks for missing doctype, lang, title, charset, viewport, alt attributes, duplicate IDs, head, and body tags. Returns issues array and score.</p><pre>curl -s \'http://147.93.131.124/api/html-validate?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/html-validate?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/favicon?url=URL</h3><p class="desc">Favicon checker — detects link rel="icon", shortcut icon, and apple-touch-icon tags. Falls back to /favicon.ico HEAD check. Returns all favicons with href, rel, type, and sizes.</p><pre>curl -s \'http://147.93.131.124/api/favicon?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/favicon?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -2870,6 +2879,260 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to check DNS blacklists'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- OG Image Preview ---
+    if (path === '/api/og-image') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'og-image')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow' })
+        const html = await resp.text()
+
+        const ogImageMatch = html.match(/<meta[^>]*property\s*=\s*["']og:image["'][^>]*content\s*=\s*["']([^"']*)["']/i)
+          || html.match(/<meta[^>]*content\s*=\s*["']([^"']*)["'][^>]*property\s*=\s*["']og:image["']/i)
+        const ogTitleMatch = html.match(/<meta[^>]*property\s*=\s*["']og:title["'][^>]*content\s*=\s*["']([^"']*)["']/i)
+          || html.match(/<meta[^>]*content\s*=\s*["']([^"']*)["'][^>]*property\s*=\s*["']og:title["']/i)
+        const ogDescMatch = html.match(/<meta[^>]*property\s*=\s*["']og:description["'][^>]*content\s*=\s*["']([^"']*)["']/i)
+          || html.match(/<meta[^>]*content\s*=\s*["']([^"']*)["'][^>]*property\s*=\s*["']og:description["']/i)
+        const ogUrlMatch = html.match(/<meta[^>]*property\s*=\s*["']og:url["'][^>]*content\s*=\s*["']([^"']*)["']/i)
+          || html.match(/<meta[^>]*content\s*=\s*["']([^"']*)["'][^>]*property\s*=\s*["']og:url["']/i)
+        const ogTypeMatch = html.match(/<meta[^>]*property\s*=\s*["']og:type["'][^>]*content\s*=\s*["']([^"']*)["']/i)
+          || html.match(/<meta[^>]*content\s*=\s*["']([^"']*)["'][^>]*property\s*=\s*["']og:type["']/i)
+        const ogSiteNameMatch = html.match(/<meta[^>]*property\s*=\s*["']og:site_name["'][^>]*content\s*=\s*["']([^"']*)["']/i)
+          || html.match(/<meta[^>]*content\s*=\s*["']([^"']*)["'][^>]*property\s*=\s*["']og:site_name["']/i)
+
+        const ogImage = ogImageMatch ? ogImageMatch[1] : null
+        const ogTitle = ogTitleMatch ? ogTitleMatch[1] : null
+        const ogDescription = ogDescMatch ? ogDescMatch[1] : null
+        const ogUrl = ogUrlMatch ? ogUrlMatch[1] : null
+        const ogType = ogTypeMatch ? ogTypeMatch[1] : null
+        const ogSiteName = ogSiteNameMatch ? ogSiteNameMatch[1] : null
+
+        return withJson({
+          url: normalized,
+          og_image: ogImage,
+          og_title: ogTitle,
+          og_description: ogDescription,
+          og_url: ogUrl,
+          og_type: ogType,
+          og_site_name: ogSiteName,
+          has_og_image: !!ogImage,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to fetch OG data'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- HTML Validator ---
+    if (path === '/api/html-validate') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'html-validate')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow' })
+        const html = await resp.text()
+
+        const issues: Array<{ type: string; message: string; severity: string }> = []
+
+        const hasDoctype = /^<!doctype\s+html/i.test(html.trim())
+        if (!hasDoctype) {
+          issues.push({ type: 'doctype', message: 'Missing <!DOCTYPE html> declaration', severity: 'error' })
+        }
+
+        const htmlTagMatch = html.match(/<html\b[^>]*>/i)
+        const hasLang = htmlTagMatch ? /\blang\s*=\s*["'][^"']+["']/i.test(htmlTagMatch[0]) : false
+        if (!hasLang) {
+          issues.push({ type: 'lang', message: 'Missing lang attribute on <html> tag', severity: 'warning' })
+        }
+
+        const hasTitleTag = /<title\b[^>]*>[^<]+<\/title>/i.test(html)
+        if (!hasTitleTag) {
+          issues.push({ type: 'title', message: 'Missing or empty <title> tag', severity: 'error' })
+        }
+
+        const hasCharset = /<meta[^>]*charset\s*=/i.test(html)
+        if (!hasCharset) {
+          issues.push({ type: 'charset', message: 'Missing charset meta tag', severity: 'warning' })
+        }
+
+        const hasViewport = /<meta[^>]*name\s*=\s*["']viewport["']/i.test(html)
+        if (!hasViewport) {
+          issues.push({ type: 'viewport', message: 'Missing viewport meta tag', severity: 'warning' })
+        }
+
+        const imgTags = html.match(/<img\b[^>]*>/gi) || []
+        let missingAltCount = 0
+        for (const img of imgTags) {
+          if (!/\balt\s*=/i.test(img)) {
+            missingAltCount++
+          }
+        }
+        if (missingAltCount > 0) {
+          issues.push({ type: 'alt', message: missingAltCount + ' image(s) missing alt attribute', severity: 'error' })
+        }
+
+        const idMatches = html.match(/\bid\s*=\s*["']([^"']+)["']/gi) || []
+        const ids: string[] = []
+        const duplicateIds: string[] = []
+        for (const m of idMatches) {
+          const idVal = m.match(/["']([^"']+)["']/)?.[1]
+          if (idVal) {
+            if (ids.includes(idVal) && !duplicateIds.includes(idVal)) {
+              duplicateIds.push(idVal)
+            }
+            ids.push(idVal)
+          }
+        }
+        if (duplicateIds.length > 0) {
+          issues.push({ type: 'duplicate-id', message: 'Duplicate IDs found: ' + duplicateIds.join(', '), severity: 'error' })
+        }
+
+        const hasHeadTag = /<head\b/i.test(html)
+        if (!hasHeadTag) {
+          issues.push({ type: 'head', message: 'Missing <head> section', severity: 'error' })
+        }
+
+        const hasBodyTag = /<body\b/i.test(html)
+        if (!hasBodyTag) {
+          issues.push({ type: 'body', message: 'Missing <body> tag', severity: 'warning' })
+        }
+
+        const totalChecks = 8
+        const errorCount = issues.filter(i => i.severity === 'error').length
+        const warnCount = issues.filter(i => i.severity === 'warning').length
+        const score = Math.max(0, Math.round(100 - (errorCount * 12.5) - (warnCount * 6.25)))
+
+        return withJson({
+          url: normalized,
+          issues,
+          issue_count: issues.length,
+          errors: errorCount,
+          warnings: warnCount,
+          has_doctype: hasDoctype,
+          has_lang: hasLang,
+          has_title: hasTitleTag,
+          has_charset: hasCharset,
+          has_viewport: hasViewport,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to validate HTML'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- Favicon Checker ---
+    if (path === '/api/favicon') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'favicon')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { redirect: 'follow' })
+        const html = await resp.text()
+        const baseUrl = new URL(normalized)
+
+        const favicons: Array<{ href: string; rel: string; type: string | null; sizes: string | null }> = []
+
+        const linkTags = html.match(/<link\b[^>]*>/gi) || []
+        for (const tag of linkTags) {
+          const relMatch = tag.match(/\brel\s*=\s*["']([^"']*)["']/i)
+          if (!relMatch) continue
+          const rel = relMatch[1].toLowerCase()
+          if (rel !== 'icon' && rel !== 'shortcut icon' && rel !== 'apple-touch-icon' && rel !== 'apple-touch-icon-precomposed') continue
+
+          const hrefMatch = tag.match(/\bhref\s*=\s*["']([^"']*)["']/i)
+          if (!hrefMatch) continue
+          const href = hrefMatch[1]
+
+          const typeMatch = tag.match(/\btype\s*=\s*["']([^"']*)["']/i)
+          const sizesMatch = tag.match(/\bsizes\s*=\s*["']([^"']*)["']/i)
+
+          let resolvedHref = href
+          try {
+            resolvedHref = new URL(href, baseUrl.origin).toString()
+          } catch {}
+
+          favicons.push({
+            href: resolvedHref,
+            rel,
+            type: typeMatch ? typeMatch[1] : null,
+            sizes: sizesMatch ? sizesMatch[1] : null,
+          })
+        }
+
+        // Check default /favicon.ico if no favicons found in HTML
+        let hasDefaultFavicon = false
+        if (favicons.length === 0) {
+          try {
+            const icoResp = await fetch(baseUrl.origin + '/favicon.ico', { method: 'HEAD', redirect: 'follow' })
+            if (icoResp.ok) {
+              hasDefaultFavicon = true
+              favicons.push({
+                href: baseUrl.origin + '/favicon.ico',
+                rel: 'icon',
+                type: 'image/x-icon',
+                sizes: null,
+              })
+            }
+          } catch {}
+        }
+
+        return withJson({
+          url: normalized,
+          favicons,
+          favicon_count: favicons.length,
+          has_favicon: favicons.length > 0,
+          has_default_favicon_ico: hasDefaultFavicon || favicons.some(f => f.href.endsWith('/favicon.ico')),
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check favicons'
         return withJson({ error: message }, { status: 502 })
       }
     }
