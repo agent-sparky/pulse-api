@@ -1,5 +1,5 @@
 import tls from 'node:tls'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createHash } from 'node:crypto'
 import { resolve as dnsResolve, Resolver } from 'node:dns/promises'
 import { appendFileSync } from 'node:fs'
 import { Database } from 'bun:sqlite'
@@ -1014,6 +1014,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/sitemap-gen?url=https://example.com'</pre>
       <p><strong>DNS over HTTPS:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/doh?url=https://example.com'</pre>
+      <p><strong>Robots Meta Tag Analyzer:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/robots-meta?url=https://example.com'</pre>
+      <p><strong>SSL Chain Validator:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/ssl-chain?url=https://example.com'</pre>
+      <p><strong>HTTP Header Fingerprint:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/header-fingerprint?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1912,6 +1918,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/screenshot?url=URL</h3><p class="desc">URL metadata preview — fetches a URL and extracts title, description meta tag, and HTTP status code for quick site previews.</p><pre>curl -s \'http://147.93.131.124/api/screenshot?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/screenshot?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/sitemap-gen?url=URL</h3><p class="desc">Sitemap generator — crawls a page, extracts same-domain links, deduplicates and sorts them, and generates a valid XML sitemap.</p><pre>curl -s \'http://147.93.131.124/api/sitemap-gen?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/sitemap-gen?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/doh?url=URL</h3><p class="desc">DNS over HTTPS lookup — queries Cloudflare DoH resolver for A and AAAA records with TTL values for any domain.</p><pre>curl -s \'http://147.93.131.124/api/doh?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/doh?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/robots-meta?url=URL</h3><p class="desc">Robots meta tag analyzer — extracts and analyzes robots meta tags and X-Robots-Tag headers, reporting index/noindex, follow/nofollow, noarchive, nosnippet, and noimageindex directives.</p><pre>curl -s \'http://147.93.131.124/api/robots-meta?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/robots-meta?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/ssl-chain?url=URL</h3><p class="desc">SSL certificate chain validator — retrieves the full SSL certificate chain from leaf to root, validates chain completeness, and reports subject, issuer, validity dates, and serial for each certificate.</p><pre>curl -s \'http://147.93.131.124/api/ssl-chain?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/ssl-chain?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/header-fingerprint?url=URL</h3><p class="desc">HTTP header fingerprint — generates a unique SHA-256 fingerprint hash from sorted HTTP response header names for server identification and comparison.</p><pre>curl -s \'http://147.93.131.124/api/header-fingerprint?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/header-fingerprint?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -5379,6 +5388,9 @@ const server = Bun.serve({
       addPath('/api/screenshot', 'get', 'URL metadata preview', [urlParam, optKey])
       addPath('/api/sitemap-gen', 'get', 'Sitemap generator', [urlParam, optKey])
       addPath('/api/doh', 'get', 'DNS over HTTPS lookup', [urlParam, optKey])
+      addPath('/api/robots-meta', 'get', 'Robots meta tag analyzer', [urlParam, optKey])
+      addPath('/api/ssl-chain', 'get', 'SSL certificate chain validator', [urlParam, optKey])
+      addPath('/api/header-fingerprint', 'get', 'HTTP header fingerprint', [urlParam, optKey])
 
       return withJson(spec)
     }
@@ -5626,6 +5638,189 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to perform DNS over HTTPS lookup'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- Robots Meta Tag Analyzer ---
+    if (path === '/api/robots-meta') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'robots-meta')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { signal: AbortSignal.timeout(10000), redirect: 'follow' })
+        const html = await resp.text()
+        const xRobotsTag = resp.headers.get('x-robots-tag') || null
+
+        const metaTags: Array<{ name: string; content: string }> = []
+        const metaRegex1 = /<meta\s+[^>]*name\s*=\s*["'](robots|googlebot)["'][^>]*content\s*=\s*["']([^"']*)["'][^>]*\/?>/gi
+        const metaRegex2 = /<meta\s+[^>]*content\s*=\s*["']([^"']*)["'][^>]*name\s*=\s*["'](robots|googlebot)["'][^>]*\/?>/gi
+        let match: RegExpExecArray | null
+        while ((match = metaRegex1.exec(html)) !== null) {
+          metaTags.push({ name: match[1].toLowerCase(), content: match[2] })
+        }
+        while ((match = metaRegex2.exec(html)) !== null) {
+          metaTags.push({ name: match[2].toLowerCase(), content: match[1] })
+        }
+
+        const allDirectives = metaTags.map(t => t.content).join(', ').toLowerCase()
+        const xDirectives = xRobotsTag ? xRobotsTag.toLowerCase() : ''
+        const combined = allDirectives + ', ' + xDirectives
+
+        const directives = {
+          index: !combined.includes('noindex'),
+          follow: !combined.includes('nofollow'),
+          noarchive: combined.includes('noarchive'),
+          nosnippet: combined.includes('nosnippet'),
+          noimageindex: combined.includes('noimageindex'),
+        }
+
+        let score = 100
+        if (!directives.index) score -= 30
+        if (!directives.follow) score -= 30
+        if (directives.noarchive) score -= 10
+        if (directives.nosnippet) score -= 10
+        if (directives.noimageindex) score -= 10
+
+        return withJson({
+          url: normalized,
+          meta_tags: metaTags,
+          x_robots_tag: xRobotsTag,
+          directives,
+          score: Math.max(0, score),
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to analyze robots meta tags'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- SSL Certificate Chain Validator ---
+    if (path === '/api/ssl-chain') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'ssl-chain')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const hostname = new URL(normalized).hostname
+
+        const chain = await new Promise<Array<{ subject: string; issuer: string; valid_from: string; valid_to: string; serial: string }>>((resolve, reject) => {
+          const socket = tls.connect(443, hostname, { servername: hostname }, () => {
+            const cert = socket.getPeerCertificate(true) as any
+            if (!cert || !cert.subject) {
+              socket.destroy()
+              return reject(new Error('No certificate returned'))
+            }
+
+            const certs: Array<{ subject: string; issuer: string; valid_from: string; valid_to: string; serial: string }> = []
+            let current = cert
+            const seen = new Set<string>()
+
+            while (current && current.subject) {
+              const serial = current.serialNumber || ''
+              if (seen.has(serial)) break
+              seen.add(serial)
+              certs.push({
+                subject: typeof current.subject === 'object' ? (current.subject.CN || JSON.stringify(current.subject)) : String(current.subject),
+                issuer: typeof current.issuer === 'object' ? (current.issuer.CN || JSON.stringify(current.issuer)) : String(current.issuer),
+                valid_from: current.valid_from || '',
+                valid_to: current.valid_to || '',
+                serial,
+              })
+              if (current.issuerCertificate && current.issuerCertificate !== current && current.issuerCertificate.serialNumber !== serial) {
+                current = current.issuerCertificate
+              } else {
+                break
+              }
+            }
+
+            socket.destroy()
+            resolve(certs)
+          })
+          socket.setTimeout(10000)
+          socket.on('timeout', () => { socket.destroy(); reject(new Error('Connection timeout')) })
+          socket.on('error', (err: Error) => { reject(err) })
+        })
+
+        const isComplete = chain.length > 0 && chain[chain.length - 1].subject === chain[chain.length - 1].issuer
+
+        return withJson({
+          url: normalized,
+          domain: hostname,
+          chain,
+          chain_length: chain.length,
+          complete: isComplete,
+          score: isComplete ? 100 : 50,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to validate SSL certificate chain'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- HTTP Header Fingerprint ---
+    if (path === '/api/header-fingerprint') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'header-fingerprint')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { signal: AbortSignal.timeout(10000), redirect: 'follow' })
+        const headerNames: string[] = []
+        resp.headers.forEach((_val: string, key: string) => { headerNames.push(key) })
+        headerNames.sort()
+
+        const hash = createHash('sha256').update(headerNames.join(',')).digest('hex')
+
+        return withJson({
+          url: normalized,
+          headers_count: headerNames.length,
+          header_names: headerNames,
+          fingerprint: 'sha256:' + hash,
+          score: 100,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to generate header fingerprint'
         return withJson({ error: message }, { status: 502 })
       }
     }
