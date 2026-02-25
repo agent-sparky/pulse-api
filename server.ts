@@ -1020,6 +1020,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/ssl-chain?url=https://example.com'</pre>
       <p><strong>HTTP Header Fingerprint:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/header-fingerprint?url=https://example.com'</pre>
+      <p><strong>Content-Type Sniffer:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/content-type?url=https://example.com'</pre>
+      <p><strong>Cookie Security Audit:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/cookie-security?url=https://example.com'</pre>
+      <p><strong>DNS CAA Record Checker:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/dns-caa?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1921,6 +1927,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/robots-meta?url=URL</h3><p class="desc">Robots meta tag analyzer — extracts and analyzes robots meta tags and X-Robots-Tag headers, reporting index/noindex, follow/nofollow, noarchive, nosnippet, and noimageindex directives.</p><pre>curl -s \'http://147.93.131.124/api/robots-meta?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/robots-meta?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/ssl-chain?url=URL</h3><p class="desc">SSL certificate chain validator — retrieves the full SSL certificate chain from leaf to root, validates chain completeness, and reports subject, issuer, validity dates, and serial for each certificate.</p><pre>curl -s \'http://147.93.131.124/api/ssl-chain?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/ssl-chain?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/header-fingerprint?url=URL</h3><p class="desc">HTTP header fingerprint — generates a unique SHA-256 fingerprint hash from sorted HTTP response header names for server identification and comparison.</p><pre>curl -s \'http://147.93.131.124/api/header-fingerprint?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/header-fingerprint?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/content-type?url=URL</h3><p class="desc">Content-Type sniffer — compares the declared Content-Type response header against the actual body content to detect mismatches between declared and detected types.</p><pre>curl -s \'http://147.93.131.124/api/content-type?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/content-type?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/cookie-security?url=URL</h3><p class="desc">Cookie security audit — parses Set-Cookie headers and evaluates each cookie for security best practices including Secure, HttpOnly, SameSite, Path, and Domain attributes.</p><pre>curl -s \'http://147.93.131.124/api/cookie-security?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/cookie-security?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-caa?url=URL</h3><p class="desc">DNS CAA record checker — queries DNS CAA records for certificate authority authorization, showing which CAs are allowed to issue certificates for the domain.</p><pre>curl -s \'http://147.93.131.124/api/dns-caa?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-caa?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -5391,6 +5400,9 @@ const server = Bun.serve({
       addPath('/api/robots-meta', 'get', 'Robots meta tag analyzer', [urlParam, optKey])
       addPath('/api/ssl-chain', 'get', 'SSL certificate chain validator', [urlParam, optKey])
       addPath('/api/header-fingerprint', 'get', 'HTTP header fingerprint', [urlParam, optKey])
+      addPath('/api/content-type', 'get', 'Content-Type sniffer', [urlParam, optKey])
+      addPath('/api/cookie-security', 'get', 'Cookie security audit', [urlParam, optKey])
+      addPath('/api/dns-caa', 'get', 'DNS CAA record checker', [urlParam, optKey])
 
       return withJson(spec)
     }
@@ -5821,6 +5833,202 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to generate header fingerprint'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- Content-Type Sniffer ---
+    if (path === '/api/content-type') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'content-type')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { signal: AbortSignal.timeout(10000), redirect: 'follow' })
+        const declaredType = resp.headers.get('content-type') || 'unknown'
+        const body = await resp.arrayBuffer()
+        const bytes = new Uint8Array(body)
+        const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(0, 2048))
+
+        let detectedType = 'unknown'
+        if (bytes.length >= 4 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
+          detectedType = 'image/png'
+        } else if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
+          detectedType = 'image/jpeg'
+        } else if (bytes.length >= 4 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) {
+          detectedType = 'image/gif'
+        } else if (bytes.length >= 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) {
+          detectedType = 'application/pdf'
+        } else {
+          const trimmed = text.trimStart()
+          if (trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<!doctype') || trimmed.startsWith('<html') || trimmed.startsWith('<HTML')) {
+            detectedType = 'text/html'
+          } else if (trimmed.startsWith('<?xml') || trimmed.startsWith('<rss') || trimmed.startsWith('<feed')) {
+            detectedType = 'application/xml'
+          } else {
+            try { JSON.parse(trimmed); detectedType = 'application/json' } catch { detectedType = 'text/plain' }
+          }
+        }
+
+        const declaredBase = declaredType.split(';')[0].trim().toLowerCase()
+        const detectedBase = detectedType.toLowerCase()
+        const match = declaredBase === detectedBase || declaredBase.includes(detectedBase) || detectedBase.includes(declaredBase)
+        const xContentTypeOptions = resp.headers.get('x-content-type-options') || null
+
+        let score = 100
+        if (!match) score -= 40
+        if (!xContentTypeOptions) score -= 10
+
+        return withJson({
+          url: normalized,
+          declared_type: declaredType,
+          detected_type: detectedType,
+          match,
+          x_content_type_options: xContentTypeOptions,
+          score: Math.max(0, score),
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to analyze content type'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- Cookie Security Audit ---
+    if (path === '/api/cookie-security') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'cookie-security')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, { signal: AbortSignal.timeout(10000), redirect: 'follow' })
+        const setCookieHeaders = resp.headers.getSetCookie ? resp.headers.getSetCookie() : []
+
+        const cookies: Array<{name: string; value_preview: string; secure: boolean; httpOnly: boolean; sameSite: string | null; path: string | null; domain: string | null; expires: string | null; max_age: number | null; score: number}> = []
+
+        for (const raw of setCookieHeaders) {
+          const parts = raw.split(';').map((s: string) => s.trim())
+          const [nameVal, ...attrs] = parts
+          const eqIdx = nameVal.indexOf('=')
+          const name = eqIdx > -1 ? nameVal.slice(0, eqIdx).trim() : nameVal.trim()
+          const value = eqIdx > -1 ? nameVal.slice(eqIdx + 1).trim() : ''
+
+          let secure = false, httpOnly = false, sameSite: string | null = null
+          let path: string | null = null, domain: string | null = null
+          let expires: string | null = null, maxAge: number | null = null
+
+          for (const attr of attrs) {
+            const lower = attr.toLowerCase()
+            if (lower === 'secure') { secure = true; continue }
+            if (lower === 'httponly') { httpOnly = true; continue }
+            if (lower.startsWith('samesite=')) { sameSite = attr.split('=')[1]?.trim() || null; continue }
+            if (lower.startsWith('path=')) { path = attr.split('=')[1]?.trim() || null; continue }
+            if (lower.startsWith('domain=')) { domain = attr.split('=')[1]?.trim() || null; continue }
+            if (lower.startsWith('expires=')) { expires = attr.slice(8).trim(); continue }
+            if (lower.startsWith('max-age=')) { maxAge = parseInt(attr.split('=')[1]?.trim() || '0', 10); continue }
+          }
+
+          let cookieScore = 100
+          const isHttps = normalized.startsWith('https')
+          if (isHttps && !secure) cookieScore -= 25
+          if (!httpOnly) cookieScore -= 25
+          if (!sameSite) cookieScore -= 20
+
+          cookies.push({ name, value_preview: value.slice(0, 8) + (value.length > 8 ? '...' : ''), secure, httpOnly, sameSite, path, domain, expires, max_age: maxAge, score: Math.max(0, cookieScore) })
+        }
+
+        const avgScore = cookies.length > 0 ? Math.round(cookies.reduce((s, c) => s + c.score, 0) / cookies.length) : 100
+
+        return withJson({
+          url: normalized,
+          cookies,
+          total: cookies.length,
+          score: avgScore,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to audit cookies'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- DNS CAA Record Checker ---
+    if (path === '/api/dns-caa') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'dns-caa')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const domain = new URL(normalized).hostname
+
+        const dohUrl = 'https://cloudflare-dns.com/dns-query?name=' + encodeURIComponent(domain) + '&type=CAA'
+        const dohResp = await fetch(dohUrl, {
+          headers: { Accept: 'application/dns-json' },
+          signal: AbortSignal.timeout(10000),
+        })
+        const dohData = await dohResp.json() as { Answer?: Array<{ type: number; data: string }> }
+
+        const caaRecords: Array<{ flags: number; tag: string; value: string }> = []
+        if (dohData.Answer) {
+          for (const ans of dohData.Answer) {
+            if (ans.type === 257) {
+              const parts = ans.data.match(/^(\d+)\s+(\w+)\s+"?(.+?)"?$/)
+              if (parts) {
+                caaRecords.push({ flags: parseInt(parts[1], 10), tag: parts[2], value: parts[3] })
+              }
+            }
+          }
+        }
+
+        const hasCaa = caaRecords.length > 0
+        const score = hasCaa ? 100 : 50
+
+        return withJson({
+          url: normalized,
+          domain,
+          caa_records: caaRecords,
+          has_caa: hasCaa,
+          score,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check DNS CAA records'
         return withJson({ error: message }, { status: 502 })
       }
     }
