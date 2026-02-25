@@ -1032,6 +1032,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/hsts-analysis?url=https://example.com'</pre>
       <p><strong>DNS MX Record Checker:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/dns-mx?url=https://example.com'</pre>
+      <p><strong>CT Log Checker:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/ct-logs?url=https://example.com'</pre>
+      <p><strong>HTTP/3 Detector:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/http3?url=https://example.com'</pre>
+      <p><strong>DMARC Record Analyzer:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/dns-dmarc?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1939,6 +1945,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/sri-scan?url=URL</h3><p class="desc">SRI scanner — scans a page for script and stylesheet resources, checking each for Subresource Integrity attributes to detect unprotected external resources.</p><pre>curl -s \'http://147.93.131.124/api/sri-scan?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/sri-scan?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/hsts-analysis?url=URL</h3><p class="desc">HSTS deep analysis — parses the Strict-Transport-Security header to extract max-age, includeSubDomains, and preload directives with compliance scoring.</p><pre>curl -s \'http://147.93.131.124/api/hsts-analysis?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/hsts-analysis?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-mx?url=URL</h3><p class="desc">DNS MX record checker — queries DNS MX records to show email server configuration with priority and exchange fields.</p><pre>curl -s \'http://147.93.131.124/api/dns-mx?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-mx?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/ct-logs?url=URL</h3><p class="desc">CT log checker — queries Certificate Transparency logs via crt.sh for a domain, returning issued certificates with issuer, validity dates, and serial numbers.</p><pre>curl -s \'http://147.93.131.124/api/ct-logs?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/ct-logs?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/http3?url=URL</h3><p class="desc">HTTP/3 detector — checks for Alt-Svc response header to detect HTTP/3 (QUIC) protocol support.</p><pre>curl -s \'http://147.93.131.124/api/http3?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/http3?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/dns-dmarc?url=URL</h3><p class="desc">DMARC record analyzer — queries DNS TXT records for _dmarc subdomain and parses DMARC policy tags including v, p, rua, ruf, sp, adkim, aspf, pct, and fo.</p><pre>curl -s \'http://147.93.131.124/api/dns-dmarc?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/dns-dmarc?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -5415,6 +5424,9 @@ const server = Bun.serve({
       addPath('/api/sri-scan', 'get', 'Subresource Integrity scanner', [urlParam, optKey])
       addPath('/api/hsts-analysis', 'get', 'HSTS deep analysis', [urlParam, optKey])
       addPath('/api/dns-mx', 'get', 'DNS MX record checker', [urlParam, optKey])
+      addPath('/api/ct-logs', 'get', 'Certificate Transparency log checker', [urlParam, optKey])
+      addPath('/api/http3', 'get', 'HTTP/3 Alt-Svc detector', [urlParam, optKey])
+      addPath('/api/dns-dmarc', 'get', 'DMARC record analyzer', [urlParam, optKey])
 
       return withJson(spec)
     }
@@ -6189,6 +6201,178 @@ const server = Bun.serve({
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to analyze HSTS'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- Certificate Transparency Log Checker ---
+    if (path === '/api/ct-logs') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'ct-logs')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const domain = new URL(normalized).hostname
+
+        const crtUrl = 'https://crt.sh/?q=' + encodeURIComponent(domain) + '&output=json&exclude=expired'
+        const crtResp = await fetch(crtUrl, {
+          signal: AbortSignal.timeout(15000),
+        })
+        const crtData = await crtResp.json() as Array<{ issuer_name: string; not_before: string; not_after: string; serial_number: string; name_value: string }>
+
+        const certificates = crtData.slice(0, 50).map(c => ({
+          issuer_name: c.issuer_name || '',
+          not_before: c.not_before || '',
+          not_after: c.not_after || '',
+          serial_number: c.serial_number || '',
+        }))
+
+        return withJson({
+          url: normalized,
+          domain,
+          certificates,
+          total: crtData.length,
+          score: crtData.length > 0 ? 100 : 0,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to query CT logs'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- HTTP/3 Alt-Svc Detector ---
+    if (path === '/api/http3') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'http3')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const resp = await fetch(normalized, {
+          method: 'HEAD',
+          redirect: 'follow',
+          signal: AbortSignal.timeout(10000),
+        })
+
+        const altSvc = resp.headers.get('alt-svc') || ''
+        const protocols: string[] = []
+        if (altSvc) {
+          const matches = altSvc.matchAll(/\b(h3(?:-\d+)?)\b/g)
+          for (const m of matches) {
+            if (!protocols.includes(m[1])) protocols.push(m[1])
+          }
+        }
+
+        const hasHttp3 = protocols.length > 0
+
+        return withJson({
+          url: normalized,
+          has_http3: hasHttp3,
+          alt_svc: altSvc || null,
+          protocols,
+          score: hasHttp3 ? 100 : 0,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to detect HTTP/3'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    // --- DNS DMARC Record Analyzer ---
+    if (path === '/api/dns-dmarc') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'dns-dmarc')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const domain = new URL(normalized).hostname
+
+        const dohUrl = 'https://cloudflare-dns.com/dns-query?name=' + encodeURIComponent('_dmarc.' + domain) + '&type=TXT'
+        const dohResp = await fetch(dohUrl, {
+          headers: { Accept: 'application/dns-json' },
+          signal: AbortSignal.timeout(10000),
+        })
+        const dohData = await dohResp.json() as { Answer?: Array<{ type: number; data: string }> }
+
+        let record = ''
+        if (dohData.Answer) {
+          for (const ans of dohData.Answer) {
+            if (ans.type === 16) {
+              const txt = ans.data.replace(/^"|"$/g, '')
+              if (txt.startsWith('v=DMARC1')) {
+                record = txt
+                break
+              }
+            }
+          }
+        }
+
+        const hasDmarc = record.length > 0
+        const tags: Record<string, string> = {}
+        if (hasDmarc) {
+          const parts = record.split(';')
+          for (const part of parts) {
+            const trimmed = part.trim()
+            const eqIdx = trimmed.indexOf('=')
+            if (eqIdx > 0) {
+              const key = trimmed.slice(0, eqIdx).trim()
+              const value = trimmed.slice(eqIdx + 1).trim()
+              tags[key] = value
+            }
+          }
+        }
+
+        const policy = tags['p'] || null
+
+        return withJson({
+          url: normalized,
+          domain,
+          has_dmarc: hasDmarc,
+          record: record || null,
+          policy,
+          tags,
+          score: hasDmarc ? 100 : 0,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to check DMARC records'
         return withJson({ error: message }, { status: 502 })
       }
     }
