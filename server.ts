@@ -60,6 +60,8 @@ type MonitorRow = {
   last_check: string | null
   status: string
   created_at: string
+  alert_url: string | null
+  last_status_code: number | null
 }
 
 const db = new Database(DB_PATH)
@@ -98,9 +100,14 @@ db.exec(`
     interval_minutes INTEGER DEFAULT 5,
     last_check TEXT,
     status TEXT DEFAULT 'active',
-    created_at TEXT
+    created_at TEXT,
+    alert_url TEXT,
+    last_status_code INTEGER
   );
 `)
+
+try { db.exec('ALTER TABLE monitors ADD COLUMN alert_url TEXT') } catch {}
+try { db.exec('ALTER TABLE monitors ADD COLUMN last_status_code INTEGER') } catch {}
 
 const findApiKeyByEmailStmt = db.prepare<
   ApiKeyRow,
@@ -127,19 +134,22 @@ const getHistoryStmt = db.prepare(
 )
 const updateApiKeyTierStmt = db.prepare('UPDATE api_keys SET tier = ? WHERE email = ?')
 const insertMonitorStmt = db.prepare(
-  `INSERT INTO monitors (api_key, url, interval_minutes, last_check, status, created_at)
-   VALUES (?, ?, ?, NULL, 'active', ?)`
+  `INSERT INTO monitors (api_key, url, interval_minutes, last_check, status, created_at, alert_url)
+   VALUES (?, ?, ?, NULL, 'active', ?, ?)`
 )
 const getMonitorsStmt = db.prepare<MonitorRow, [string]>(
-  "SELECT id, api_key, url, interval_minutes, last_check, status, created_at FROM monitors WHERE api_key = ? AND status = 'active'",
+  "SELECT id, api_key, url, interval_minutes, last_check, status, created_at, alert_url, last_status_code FROM monitors WHERE api_key = ? AND status = 'active'",
 )
 const deleteMonitorStmt = db.prepare(
   'UPDATE monitors SET status = \'deleted\' WHERE id = ? AND api_key = ?',
 )
 const getDueMonitorsStmt = db.prepare<
-  Pick<MonitorRow, 'id' | 'api_key' | 'url' | 'interval_minutes' | 'last_check'>,
+  Pick<MonitorRow, 'id' | 'api_key' | 'url' | 'interval_minutes' | 'last_check' | 'alert_url' | 'last_status_code'>,
   []
->("SELECT id, api_key, url, interval_minutes, last_check FROM monitors WHERE status = 'active'")
+>("SELECT id, api_key, url, interval_minutes, last_check, alert_url, last_status_code FROM monitors WHERE status = 'active'")
+const updateMonitorStatusCodeStmt = db.prepare('UPDATE monitors SET last_status_code = ? WHERE id = ?')
+const getMonitorByIdAndKeyStmt = db.prepare<MonitorRow, [number, string]>('SELECT * FROM monitors WHERE id = ? AND api_key = ?')
+const getChecksByKeyAndUrlStmt = db.prepare('SELECT id, api_key, ip, url, status_code, response_time_ms, created_at FROM checks WHERE api_key = ? AND url = ? ORDER BY id DESC LIMIT 100')
 
 function toISOStringNow(): string {
   return new Date().toISOString()
@@ -780,7 +790,10 @@ function landingHtml(): string {
       <pre>curl -s -X POST 'http://147.93.131.124/api/monitors' \
   -H 'X-API-Key: YOUR_KEY' \
   -H 'Content-Type: application/json' \
-  -d '{"url":"https://example.com","interval_minutes":5}'</pre>
+  -d '{"url":"https://example.com","interval_minutes":5,"alert_url":"https://your-webhook.com/alert"}'</pre>
+      <p><strong>Monitor Checks:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/monitors/1/checks' \
+  -H 'X-API-Key: YOUR_KEY'</pre>
     </section>
 
     <section class="section">
@@ -1189,13 +1202,14 @@ const server = Bun.serve({
             return withJson({ error: 'Missing url' }, { status: 400 })
           }
 
+          const alertUrl = payload && typeof payload.alert_url === 'string' ? payload.alert_url.trim() || null : null
           const requestedInterval =
             payload && typeof payload.interval_minutes === 'number' && Number.isFinite(payload.interval_minutes)
               ? Math.floor(payload.interval_minutes)
               : 5
           const intervalMinutes = Math.max(1, Math.min(60, requestedInterval))
           const now = toISOStringNow()
-          const inserted = insertMonitorStmt.run(apiKeyRow.key, monitorUrl, intervalMinutes, now) as {
+          const inserted = insertMonitorStmt.run(apiKeyRow.key, monitorUrl, intervalMinutes, now, alertUrl) as {
             lastInsertRowid: number
           }
 
@@ -1204,6 +1218,7 @@ const server = Bun.serve({
               id: inserted.lastInsertRowid,
               url: monitorUrl,
               interval_minutes: intervalMinutes,
+              alert_url: alertUrl,
               status: 'active',
             },
             { status: 201 },
@@ -1211,6 +1226,27 @@ const server = Bun.serve({
         }
 
         return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const checksMatch = path.match(/^\/api\/monitors\/(\d+)\/checks$/)
+      if (checksMatch) {
+        if (request.method !== 'GET') {
+          return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+        }
+
+        const monitorId = Number(checksMatch[1])
+        const monitor = getMonitorByIdAndKeyStmt.get(monitorId, apiKeyRow.key) as MonitorRow | null
+        if (!monitor) {
+          return withJson({ error: 'Monitor not found' }, { status: 404 })
+        }
+
+        const monUrl = monitor.url
+        const altUrl = monUrl.endsWith('/') ? monUrl.slice(0, -1) : monUrl + '/'
+        const checks = [
+          ...getChecksByKeyAndUrlStmt.all(apiKeyRow.key, monUrl) as any[],
+          ...getChecksByKeyAndUrlStmt.all(apiKeyRow.key, altUrl) as any[],
+        ].sort((a: any, b: any) => b.id - a.id).slice(0, 100)
+        return withJson(checks)
       }
 
       const deleteMatch = path.match(/^\/api\/monitors\/(\d+)$/)
@@ -1270,6 +1306,39 @@ setInterval(async () => {
           result.timestamp,
         )
         db.prepare('UPDATE monitors SET last_check = ? WHERE id = ?').run(result.timestamp, mon.id)
+
+        const newCode = result.statusCode
+        const oldCode = mon.last_status_code as number | null
+
+        if (mon.alert_url) {
+          if (oldCode === 200 && newCode !== 200) {
+            fetch(mon.alert_url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                monitor_id: mon.id,
+                url: mon.url,
+                status: 'down',
+                status_code: newCode,
+                checked_at: new Date().toISOString(),
+              }),
+            }).catch(() => {})
+          } else if (oldCode !== null && oldCode !== 200 && newCode === 200) {
+            fetch(mon.alert_url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                monitor_id: mon.id,
+                url: mon.url,
+                status: 'up',
+                status_code: 200,
+                checked_at: new Date().toISOString(),
+              }),
+            }).catch(() => {})
+          }
+        }
+
+        updateMonitorStatusCodeStmt.run(newCode, mon.id)
       } catch {}
     }
   }
