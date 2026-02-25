@@ -912,6 +912,12 @@ function landingHtml(): string {
       <pre>curl -s 'http://147.93.131.124/api/sitemap?url=https://example.com/sitemap.xml'</pre>
       <p><strong>SSL Certificate Monitor:</strong></p>
       <pre>curl -s 'http://147.93.131.124/api/ssl?url=https://example.com'</pre>
+      <p><strong>Robots.txt Parser:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/robots?url=https://example.com'</pre>
+      <p><strong>Mixed Content Scanner:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/mixed-content?url=https://example.com'</pre>
+      <p><strong>Response Header Timeline:</strong></p>
+      <pre>curl -s 'http://147.93.131.124/api/timeline?url=https://example.com'</pre>
       <p><strong>Full API Docs:</strong> <a href="/docs" style="color:var(--accent)">/docs</a></p>
     </section>
 
@@ -1759,6 +1765,9 @@ const server = Bun.serve({
         + '<div class="ep"><h3><span class="method get">GET</span>/api/score?url=URL</h3><p class="desc">Aggregate site quality score — combines performance (30%), SEO (30%), and security (40%) into an overall score.</p><pre>curl -s \'http://147.93.131.124/api/score?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/score?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/sitemap?url=URL</h3><p class="desc">XML sitemap parser — fetches and parses sitemap XML, extracts all URLs from &lt;loc&gt; tags (max 100).</p><pre>curl -s \'http://147.93.131.124/api/sitemap?url=https://example.com/sitemap.xml\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/sitemap?url=https://example.com/sitemap.xml\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method get">GET</span>/api/ssl?url=URL</h3><p class="desc">Detailed SSL certificate monitor — issuer, expiry date, days until expiry, TLS protocol version, and expiry warnings.</p><pre>curl -s \'http://147.93.131.124/api/ssl?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/ssl?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/robots?url=URL</h3><p class="desc">Robots.txt parser — fetches and parses robots.txt, extracts User-agent, Allow, Disallow, Sitemap directives and Crawl-delay.</p><pre>curl -s \'http://147.93.131.124/api/robots?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/robots?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/mixed-content?url=URL</h3><p class="desc">Mixed content scanner — detects HTTP resources loaded on HTTPS pages, reports insecure src/href/action attributes.</p><pre>curl -s \'http://147.93.131.124/api/mixed-content?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/mixed-content?url=https://example.com\')">Try It</button><div class="result"></div></div>'
+        + '<div class="ep"><h3><span class="method get">GET</span>/api/timeline?url=URL</h3><p class="desc">Response header timeline — traces redirect chain with per-hop timing, total hops, and total time.</p><pre>curl -s \'http://147.93.131.124/api/timeline?url=https://example.com\'</pre><button class="try-btn" onclick="tryIt(this,\'/api/timeline?url=https://example.com\')">Try It</button><div class="result"></div></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/batch</h3><p class="desc">Bulk URL analysis — accepts up to 10 URLs in JSON body.</p><pre>curl -s -X POST \'http://147.93.131.124/api/batch\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"urls":["https://example.com","https://google.com"]}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/test-webhook</h3><p class="desc">Webhook delivery test — sends test payload to provided URL.</p><pre>curl -s -X POST \'http://147.93.131.124/api/test-webhook\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"url":"https://httpbin.org/post"}\'</pre></div>'
         + '<div class="ep"><h3><span class="method post">POST</span>/api/register</h3><p class="desc">Register with email to receive an API key.</p><pre>curl -s -X POST \'http://147.93.131.124/api/register\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"email":"you@example.com"}\'</pre></div>'
@@ -2105,6 +2114,175 @@ const server = Bun.serve({
         return withJson({ url: normalized, ...sslResult })
       } catch (error) {
         const message = error instanceof Error ? error.message : 'SSL check failed'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/robots') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'robots')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const parsedUrl = new URL(normalized)
+        const robotsUrl = parsedUrl.origin + '/robots.txt'
+
+        const resp = await fetch(robotsUrl, { redirect: 'follow', signal: AbortSignal.timeout(10000) })
+        if (!resp.ok) {
+          return withJson({ url: robotsUrl, user_agents: [], disallow: [], allow: [], sitemaps: [], crawl_delay: null, error: 'robots.txt returned ' + resp.status })
+        }
+
+        const text = await resp.text()
+        const lines = text.split('\n')
+        const userAgents: string[] = []
+        const disallow: string[] = []
+        const allow: string[] = []
+        const sitemaps: string[] = []
+        let crawlDelay: number | null = null
+
+        for (const raw of lines) {
+          const line = raw.trim()
+          const lower = line.toLowerCase()
+          if (lower.startsWith('user-agent:')) {
+            const val = line.slice(11).trim()
+            if (val && !userAgents.includes(val)) userAgents.push(val)
+          } else if (lower.startsWith('disallow:')) {
+            const val = line.slice(9).trim()
+            if (val && !disallow.includes(val)) disallow.push(val)
+          } else if (lower.startsWith('allow:')) {
+            const val = line.slice(6).trim()
+            if (val && !allow.includes(val)) allow.push(val)
+          } else if (lower.startsWith('sitemap:')) {
+            const val = line.slice(8).trim()
+            if (val && !sitemaps.includes(val)) sitemaps.push(val)
+          } else if (lower.startsWith('crawl-delay:')) {
+            const val = parseInt(line.slice(12).trim(), 10)
+            if (!Number.isNaN(val)) crawlDelay = val
+          }
+        }
+
+        return withJson({ url: robotsUrl, user_agents: userAgents, disallow, allow, sitemaps, crawl_delay: crawlDelay })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to fetch robots.txt'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/mixed-content') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'mixed-content')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const parsedUrl = new URL(normalized)
+        const isHttps = parsedUrl.protocol === 'https:'
+
+        const resp = await fetch(normalized, { redirect: 'follow', signal: AbortSignal.timeout(10000) })
+        const html = await resp.text()
+
+        const resourceRegex = /(?:src|href|action)\s*=\s*["']([^"']+)["']/gi
+        const allResources: string[] = []
+        const httpResources: string[] = []
+        let match: RegExpExecArray | null
+
+        while ((match = resourceRegex.exec(html)) !== null) {
+          const resource = match[1]
+          if (resource.startsWith('http://') || resource.startsWith('https://') || resource.startsWith('//')) {
+            allResources.push(resource)
+            if (isHttps && resource.startsWith('http://')) {
+              httpResources.push(resource)
+            }
+          }
+        }
+
+        return withJson({
+          url: normalized,
+          is_https: isHttps,
+          mixed_content_found: httpResources.length > 0,
+          http_resources: httpResources,
+          total_resources: allResources.length,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to scan for mixed content'
+        return withJson({ error: message }, { status: 502 })
+      }
+    }
+
+    if (path === '/api/timeline') {
+      if (request.method !== 'GET') {
+        return withJson({ error: 'Method Not Allowed' }, { status: 405 })
+      }
+
+      const target = url.searchParams.get('url')
+      if (!target) {
+        return withJson({ error: 'url parameter required' }, { status: 400 })
+      }
+
+      const apiKey = request.headers.get('X-API-Key')?.trim() || null
+      const clientIp = getClientIp(request)
+      const rl = getEndpointRateLimit(clientIp, apiKey, 'timeline')
+      if (!rl.allowed) {
+        return withJson({ error: 'Rate limit exceeded', limit: rl.limit, resetAt: rl.resetAt }, { status: 429 })
+      }
+
+      try {
+        const normalized = normalizeUrl(target)
+        const hops: Array<{ url: string; status: number; time_ms: number }> = []
+        let currentUrl = normalized
+        const maxHops = 10
+
+        for (let i = 0; i < maxHops; i++) {
+          const start = performance.now()
+          const resp = await fetch(currentUrl, { redirect: 'manual', signal: AbortSignal.timeout(10000) })
+          const elapsed = Math.round(performance.now() - start)
+
+          hops.push({ url: currentUrl, status: resp.status, time_ms: elapsed })
+
+          if (resp.status >= 300 && resp.status < 400) {
+            const location = resp.headers.get('location')
+            if (!location) break
+            currentUrl = location.startsWith('http') ? location : new URL(location, currentUrl).href
+          } else {
+            break
+          }
+        }
+
+        const totalTime = hops.reduce((sum, h) => sum + h.time_ms, 0)
+
+        return withJson({
+          url: normalized,
+          hops,
+          total_hops: hops.length,
+          total_time_ms: totalTime,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to trace redirect timeline'
         return withJson({ error: message }, { status: 502 })
       }
     }
